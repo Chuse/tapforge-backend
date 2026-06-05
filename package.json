@@ -1,31 +1,20 @@
-const express = require('express');
-const cors = require('cors');
-
-const changellyRouter = require('./routes/changelly');
-const swapRouter = require('./routes/swap');
-
-const app = express();
-const PORT = process.env.PORT ?? 8080;
-
-app.use(cors());
-app.use(express.json());
-
-// ─── Health ────────────────────────────────────────────────────────────────
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'TapForge Backend' });
-});
-
-// ─── Swap: proveedor unificado (Bitcoin.me DEX + futuro Changelly) ─────────
-app.use('/swap', swapRouter);
-
-// ─── Changelly: endpoints legacy / pares externos ─────────────────────────
-app.use('/swap/changelly', changellyRouter);
-
-// ─── 404 ───────────────────────────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({ error: 'Endpoint no encontrado' });
-});
-
-app.listen(PORT, () => {
-  console.log(`TapForge Backend corriendo en puerto ${PORT}`);
-});
+{
+  "name": "tapforge-backend",
+  "version": "1.1.0",
+  "description": "TapForge backend — Swap router + Changelly proxy",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
