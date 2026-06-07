@@ -172,9 +172,19 @@ router.get('/sync/status', async (req, res) => {
   }
 })
 
+// ─── Helpers de validación ────────────────────────────────────────────────
+const VALID_CHAIN_IDS = ['klever', 'tron', 'ethereum', 'bitcoin']
+const PARAM_REGEX     = /^[a-zA-Z0-9_\-]{1,50}$/
+
+function validateChainId(chainId) {
+  return VALID_CHAIN_IDS.includes(chainId)
+}
+
+function validateTokenId(tokenId) {
+  return PARAM_REGEX.test(tokenId)
+}
+
 // ─── PATCH /assets/chains/:chainId/tokens/:tokenId ────────────────────────
-// Actualiza propiedades de un token (featured, etc.)
-// Requiere ADMIN_SECRET
 router.patch('/chains/:chainId/tokens/:tokenId', async (req, res) => {
   const secret = req.headers['x-admin-secret']
   if (secret !== ADMIN_SECRET) {
@@ -182,10 +192,18 @@ router.patch('/chains/:chainId/tokens/:tokenId', async (req, res) => {
   }
 
   const { chainId, tokenId } = req.params
-  const { featured } = req.body
 
-  if (featured === undefined) {
-    return res.status(400).json({ error: 'Nada que actualizar — envía { featured: true/false }' })
+  // Validar parámetros
+  if (!validateChainId(chainId)) {
+    return res.status(400).json({ error: `Blockchain '${chainId}' no válida` })
+  }
+  if (!validateTokenId(tokenId)) {
+    return res.status(400).json({ error: 'Token ID no válido — solo letras, números, guiones y guiones bajos (máx 50 caracteres)' })
+  }
+
+  const { featured } = req.body
+  if (typeof featured !== 'boolean') {
+    return res.status(400).json({ error: 'El campo featured debe ser true o false' })
   }
 
   try {
@@ -208,8 +226,6 @@ router.patch('/chains/:chainId/tokens/:tokenId', async (req, res) => {
 })
 
 // ─── PATCH /assets/chains/:chainId ────────────────────────────────────────
-// Actualiza propiedades de una blockchain (enabled, etc.)
-// Requiere ADMIN_SECRET
 router.patch('/chains/:chainId', async (req, res) => {
   const secret = req.headers['x-admin-secret']
   if (secret !== ADMIN_SECRET) {
@@ -217,10 +233,14 @@ router.patch('/chains/:chainId', async (req, res) => {
   }
 
   const { chainId } = req.params
-  const { enabled } = req.body
 
-  if (enabled === undefined) {
-    return res.status(400).json({ error: 'Nada que actualizar — envía { enabled: true/false }' })
+  if (!validateChainId(chainId)) {
+    return res.status(400).json({ error: `Blockchain '${chainId}' no válida` })
+  }
+
+  const { enabled } = req.body
+  if (typeof enabled !== 'boolean') {
+    return res.status(400).json({ error: 'El campo enabled debe ser true o false' })
   }
 
   try {
