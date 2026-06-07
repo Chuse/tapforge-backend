@@ -74,7 +74,7 @@ router.post('/sync', async (req, res) => {
     let hasMore = true
 
     while (hasMore) {
-      const response = await fetch(`${KLEVER_API}/assets?page=${page}&limit=50`)
+      const response = await fetch(`${KLEVER_API}/assets/list?page=${page}&limit=50`)
       if (!response.ok) break
 
       const data   = await response.json()
@@ -82,10 +82,10 @@ router.post('/sync', async (req, res) => {
 
       for (const asset of assets) {
         // Solo tokens fungibles
-        if (asset.assetType !== 0 && asset.assetType !== 'Fungible') continue
+        if (asset.assetType !== 'Fungible') continue
 
         allTokens.push({
-          id:        asset.assetId ?? asset.ticker,
+          id:        asset.assetId,
           chain_id:  'klever',
           name:      asset.name ?? asset.ticker,
           symbol:    asset.ticker,
