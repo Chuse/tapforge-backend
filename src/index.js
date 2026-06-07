@@ -12,6 +12,7 @@ const PORT = process.env.PORT ?? 8080
 
 app.use(cors())
 app.use(express.json())
+app.set('trust proxy', 1) // Railway usa proxy
 
 // ─── Rate limiting global ──────────────────────────────────────────────────
 const globalLimiter = rateLimit({
