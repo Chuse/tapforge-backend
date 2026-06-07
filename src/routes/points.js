@@ -30,6 +30,7 @@ const OFFCHAIN_POINTS = {
   create_domain:    { points: 500, once: true  },
   activate_tapcard: { points: 200, once: true  },
   import_wallet:    { points: 50,  once: true  },
+  wallet_added:     { points: 0,   once: true  }, // solo marca la fecha, no da puntos
   // Cada vez
   swap:             { points: 50,  once: false },
   open_dapp:        { points: 10,  once: false },
@@ -76,14 +77,30 @@ function calcLevel(points) {
 // ─── Calcular puntos on-chain ─────────────────────────────────────────────
 async function calcOnchainPoints(address) {
   try {
-    // Obtener historial completo de txs (hasta 100)
+    // Obtener fecha desde la que contar
+    // Si tiene wallet_added en BD → desde esa fecha
+    // Si no → desde el 1 de junio de 2026 (inicio de TapForge)
+    const TAPFORGE_EPOCH = new Date('2026-06-01T00:00:00Z').getTime() / 1000
+
+    const walletEvent = await pool.query(
+      'SELECT created_at FROM user_events WHERE address = $1 AND event = $2 ORDER BY created_at ASC LIMIT 1',
+      [address, 'wallet_added']
+    )
+    const sinceSec = walletEvent.rows[0]
+      ? new Date(walletEvent.rows[0].created_at).getTime() / 1000
+      : TAPFORGE_EPOCH
+
+    // Obtener historial de txs
     const res = await fetch(
       `${KLEVER_API}/address/${address}/transactions?limit=100`
     )
     if (!res.ok) return { points: 0, breakdown: [] }
 
     const data = await res.json()
-    const txs  = data?.data?.transactions ?? []
+    let txs = data?.data?.transactions ?? []
+
+    // Filtrar txs posteriores a la fecha de inicio
+    txs = txs.filter(tx => (tx.timestamp ?? 0) >= sinceSec)
 
     let points    = 0
     const breakdown = []
