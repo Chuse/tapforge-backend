@@ -32,8 +32,14 @@ router.get('/chains', async (req, res) => {
 })
 
 // ─── GET /assets/chains/:chainId ─────────────────────────────────────────
+// Soporta paginación: ?page=1&limit=20&search=usdt
 router.get('/chains/:chainId', async (req, res) => {
   const { chainId } = req.params
+  const page   = Math.max(1, parseInt(req.query.page  ?? '1'))
+  const limit  = Math.min(50, Math.max(1, parseInt(req.query.limit ?? '20')))
+  const search = (req.query.search ?? '').trim().toLowerCase()
+  const offset = (page - 1) * limit
+
   try {
     const chainResult = await pool.query(
       'SELECT * FROM chains WHERE id = $1',
@@ -43,15 +49,33 @@ router.get('/chains/:chainId', async (req, res) => {
       return res.status(404).json({ error: `Blockchain '${chainId}' no encontrada` })
     }
 
+    // Contar total con filtro de búsqueda
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM tokens
+       WHERE chain_id = $1
+       AND ($2 = '' OR LOWER(symbol) LIKE $3 OR LOWER(name) LIKE $3 OR LOWER(id) LIKE $3)`,
+      [chainId, search, `%${search}%`]
+    )
+    const total = parseInt(countResult.rows[0].count)
+
+    // Tokens paginados — primero los featured, luego alfabético
     const tokensResult = await pool.query(
-      'SELECT * FROM tokens WHERE chain_id = $1 ORDER BY featured DESC, symbol ASC',
-      [chainId]
+      `SELECT * FROM tokens
+       WHERE chain_id = $1
+       AND ($2 = '' OR LOWER(symbol) LIKE $3 OR LOWER(name) LIKE $3 OR LOWER(id) LIKE $3)
+       ORDER BY featured DESC, symbol ASC
+       LIMIT $4 OFFSET $5`,
+      [chainId, search, `%${search}%`, limit, offset]
     )
 
     res.json({
       chain:     chainResult.rows[0],
       tokens:    tokensResult.rows,
-      total:     tokensResult.rows.length,
+      total,
+      page,
+      limit,
+      pages:     Math.ceil(total / limit),
+      hasMore:   offset + tokensResult.rows.length < total,
       updatedAt: new Date().toISOString(),
     })
   } catch (e) {
