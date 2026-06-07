@@ -6,6 +6,7 @@ const { initDB }      = require('./db')
 const changellyRouter = require('./routes/changelly')
 const swapRouter      = require('./routes/swap')
 const assetsRouter    = require('./routes/assets')
+const pointsRouter    = require('./routes/points')
 
 const app  = express()
 const PORT = process.env.PORT ?? 8080
@@ -43,6 +44,9 @@ app.get('/health', (req, res) => {
 app.use('/assets/sync',          adminLimiter)
 app.use('/assets/chains/:id',    adminLimiter)
 app.use('/assets', assetsRouter)
+
+// ─── Points ────────────────────────────────────────────────────────────────
+app.use('/points', pointsRouter)
 
 // ─── Changelly ────────────────────────────────────────────────────────────
 app.use('/swap/changelly', changellyRouter)
