@@ -158,7 +158,7 @@ router.get('/', async (req, res) => {
 
     // Sumar puntos on-chain
     let totalOnchain = 0
-    const onchainBreakdown: any[] = []
+    const onchainBreakdown = []
     for (const r of results) {
       totalOnchain += r.points
       onchainBreakdown.push(...r.breakdown)
