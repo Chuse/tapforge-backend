@@ -172,4 +172,74 @@ router.get('/sync/status', async (req, res) => {
   }
 })
 
+// ─── PATCH /assets/chains/:chainId/tokens/:tokenId ────────────────────────
+// Actualiza propiedades de un token (featured, etc.)
+// Requiere ADMIN_SECRET
+router.patch('/chains/:chainId/tokens/:tokenId', async (req, res) => {
+  const secret = req.headers['x-admin-secret']
+  if (secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'No autorizado' })
+  }
+
+  const { chainId, tokenId } = req.params
+  const { featured } = req.body
+
+  if (featured === undefined) {
+    return res.status(400).json({ error: 'Nada que actualizar — envía { featured: true/false }' })
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE tokens SET featured = $1
+       WHERE id = $2 AND chain_id = $3
+       RETURNING id, chain_id, name, symbol, featured`,
+      [featured, tokenId, chainId]
+    )
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: `Token '${tokenId}' no encontrado en '${chainId}'` })
+    }
+
+    res.json({ success: true, token: result.rows[0] })
+  } catch (e) {
+    console.error('[assets] Error actualizando token:', e.message)
+    res.status(500).json({ error: 'Error interno' })
+  }
+})
+
+// ─── PATCH /assets/chains/:chainId ────────────────────────────────────────
+// Actualiza propiedades de una blockchain (enabled, etc.)
+// Requiere ADMIN_SECRET
+router.patch('/chains/:chainId', async (req, res) => {
+  const secret = req.headers['x-admin-secret']
+  if (secret !== ADMIN_SECRET) {
+    return res.status(401).json({ error: 'No autorizado' })
+  }
+
+  const { chainId } = req.params
+  const { enabled } = req.body
+
+  if (enabled === undefined) {
+    return res.status(400).json({ error: 'Nada que actualizar — envía { enabled: true/false }' })
+  }
+
+  try {
+    const result = await pool.query(
+      `UPDATE chains SET enabled = $1, updated_at = NOW()
+       WHERE id = $2
+       RETURNING id, name, enabled`,
+      [enabled, chainId]
+    )
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: `Blockchain '${chainId}' no encontrada` })
+    }
+
+    res.json({ success: true, chain: result.rows[0] })
+  } catch (e) {
+    console.error('[assets] Error actualizando chain:', e.message)
+    res.status(500).json({ error: 'Error interno' })
+  }
+})
+
 module.exports = router
