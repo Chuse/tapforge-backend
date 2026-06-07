@@ -52,6 +52,27 @@ async function initPointsDB() {
 }
 initPointsDB().catch(console.error)
 
+// ─── Niveles ──────────────────────────────────────────────────────────────
+const LEVELS = [
+  { level: 1, name: 'Explorer',  points: 0       },
+  { level: 2, name: 'Builder',   points: 500     },
+  { level: 3, name: 'Architect', points: 2000    },
+  { level: 4, name: 'Guardian',  points: 7500    },
+  { level: 5, name: 'Veteran',   points: 20000   },
+  { level: 6, name: 'Master',    points: 50000   },
+  { level: 7, name: 'Legend',    points: 150000  },
+]
+
+function calcLevel(points) {
+  let currentLevel = LEVELS[0]
+  let nextLevel    = null
+  for (const lvl of LEVELS) {
+    if (points >= lvl.points) currentLevel = lvl
+    else if (!nextLevel)      nextLevel    = lvl
+  }
+  return { currentLevel, nextLevel }
+}
+
 // ─── Calcular puntos on-chain ─────────────────────────────────────────────
 async function calcOnchainPoints(address) {
   try {
@@ -116,27 +137,42 @@ async function calcOnchainPoints(address) {
   }
 }
 
-// ─── GET /points/:address ─────────────────────────────────────────────────
-router.get('/:address', async (req, res) => {
-  const { address } = req.params
+// ─── GET /points ──────────────────────────────────────────────────────────
+// Soporta una o múltiples direcciones firmantes
+// GET /points?addresses=klv1abc...,klv1xyz...
+// GET /points/:address (compatibilidad hacia atrás)
+router.get('/', async (req, res) => {
+  const addressesParam = req.query.addresses ?? ''
+  const addresses = addressesParam
+    .split(',')
+    .map(a => a.trim())
+    .filter(a => a.startsWith('klv1') && a.length === 62)
 
-  if (!address.startsWith('klv1') || address.length !== 62) {
-    return res.status(400).json({ error: 'Dirección Klever inválida' })
+  if (addresses.length === 0) {
+    return res.status(400).json({ error: 'Se requiere al menos una dirección válida' })
   }
 
   try {
-    // Puntos on-chain
-    const onchain = await calcOnchainPoints(address)
+    // Calcular puntos de cada dirección en paralelo
+    const results = await Promise.all(addresses.map(calcOnchainPoints))
 
-    // Puntos off-chain desde BD
+    // Sumar puntos on-chain
+    let totalOnchain = 0
+    const onchainBreakdown: any[] = []
+    for (const r of results) {
+      totalOnchain += r.points
+      onchainBreakdown.push(...r.breakdown)
+    }
+
+    // Puntos off-chain — suma de todas las direcciones
     const offchainResult = await pool.query(
-      'SELECT event, SUM(points) as total, COUNT(*) as count FROM user_events WHERE address = $1 GROUP BY event',
-      [address]
+      `SELECT event, SUM(points) as total, COUNT(*) as count 
+       FROM user_events WHERE address = ANY($1) GROUP BY event`,
+      [addresses]
     )
 
     let offchainPoints = 0
     const offchainBreakdown = []
-
     for (const row of offchainResult.rows) {
       offchainPoints += parseInt(row.total)
       offchainBreakdown.push({
@@ -146,33 +182,16 @@ router.get('/:address', async (req, res) => {
       })
     }
 
-    const totalPoints = onchain.points + offchainPoints
-
-    // Calcular nivel
-    const LEVELS = [
-      { level: 1, name: 'Explorer',  points: 0       },
-      { level: 2, name: 'Builder',   points: 500     },
-      { level: 3, name: 'Architect', points: 2000    },
-      { level: 4, name: 'Guardian',  points: 7500    },
-      { level: 5, name: 'Veteran',   points: 20000   },
-      { level: 6, name: 'Master',    points: 50000   },
-      { level: 7, name: 'Legend',    points: 150000  },
-    ]
-
-    let currentLevel = LEVELS[0]
-    let nextLevel    = null
-    for (let i = 0; i < LEVELS.length; i++) {
-      if (totalPoints >= LEVELS[i].points) currentLevel = LEVELS[i]
-      if (totalPoints < LEVELS[i].points && !nextLevel) nextLevel = LEVELS[i]
-    }
+    const totalPoints = totalOnchain + offchainPoints
+    const { currentLevel, nextLevel } = calcLevel(totalPoints)
 
     res.json({
-      address,
-      points: totalPoints,
-      level:  currentLevel,
+      addresses,
+      points:    totalPoints,
+      level:     currentLevel,
       nextLevel,
       breakdown: {
-        onchain:  onchain.breakdown,
+        onchain:  onchainBreakdown,
         offchain: offchainBreakdown,
       },
     })
@@ -180,6 +199,17 @@ router.get('/:address', async (req, res) => {
     console.error('[points] Error:', e.message)
     res.status(500).json({ error: 'Error interno' })
   }
+})
+
+// ─── GET /points/:address ─────────────────────────────────────────────────
+// Compatibilidad hacia atrás — una sola dirección
+router.get('/:address', async (req, res) => {
+  const { address } = req.params
+  if (!address.startsWith('klv1') || address.length !== 62) {
+    return res.status(400).json({ error: 'Dirección Klever inválida' })
+  }
+  req.query.addresses = address
+  return router.handle({ ...req, url: '/', method: 'GET' }, res, () => {})
 })
 
 // ─── POST /points/event ───────────────────────────────────────────────────
