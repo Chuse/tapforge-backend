@@ -74,8 +74,29 @@ function calcLevel(points) {
   return { currentLevel, nextLevel }
 }
 
+// ─── Cache en memoria (TTL 2 min) ─────────────────────────────────────────
+const ONCHAIN_CACHE_TTL = 2 * 60 * 1000 // 2 minutos
+const onchainCache = new Map() // address → { points, breakdown, cachedAt }
+
+function getCached(address) {
+  const entry = onchainCache.get(address)
+  if (!entry) return null
+  if (Date.now() - entry.cachedAt > ONCHAIN_CACHE_TTL) {
+    onchainCache.delete(address)
+    return null
+  }
+  return entry
+}
+
+function setCached(address, points, breakdown) {
+  onchainCache.set(address, { points, breakdown, cachedAt: Date.now() })
+}
+
 // ─── Calcular puntos on-chain ─────────────────────────────────────────────
 async function calcOnchainPoints(address) {
+  const cached = getCached(address)
+  if (cached) return cached
+
   try {
     // Obtener fecha desde la que contar
     // Si tiene wallet_added en BD → desde esa fecha
@@ -147,6 +168,7 @@ async function calcOnchainPoints(address) {
       }
     }
 
+    setCached(address, points, breakdown)
     return { points, breakdown }
   } catch (e) {
     console.error('[points] Error calculando on-chain:', e.message)
@@ -268,6 +290,9 @@ router.post('/event', async (req, res) => {
       'INSERT INTO user_events (address, event, chain, points, metadata) VALUES ($1, $2, $3, $4, $5)',
       [address, event, chain, config.points, JSON.stringify(metadata)]
     )
+
+    // Invalidar cache on-chain de esta dirección
+    onchainCache.delete(address)
 
     res.json({
       success: true,
