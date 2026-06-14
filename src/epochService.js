@@ -101,7 +101,7 @@ async function fetchValidators() {
         name:       v.name ?? '',
         elected:    listStatus === 'eligible',
         jailed:     v.jailed === true || listStatus === 'jailed',
-        inactive:   listStatus === 'new' || listStatus === '',
+        inactive:   listStatus !== 'eligible' && listStatus !== 'jailed' && listStatus !== 'waiting',
         waiting:    listStatus === 'waiting',
         stake:      v.totalStake ?? 0,
         commission: v.commission ?? 0,
@@ -128,7 +128,7 @@ async function fetchKlvAsset() {
 
   return {
     stakingTotal:      (a.staking?.totalStaked   ?? 0) / div,
-    burned:            (a.burned                 ?? 0) / div,
+    burned:            (a.burnedValue            ?? 0) / div,
     circulatingSupply: (a.circulatingSupply       ?? 0) / div,
   }
 }
