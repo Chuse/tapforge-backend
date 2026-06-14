@@ -560,6 +560,35 @@ function createBot(pool) {
     }
   })
 
+  // /testalerts — solo admin
+  bot.command('testalerts', async (ctx) => {
+    if (ctx.from.id !== ADMIN_TELEGRAM_ID) return
+
+    await ctx.reply('⏳ Ejecutando alertas personalizadas de prueba\\.\\.\\.', { parse_mode: 'MarkdownV2' })
+
+    try {
+      const snapRes  = await pool.query(
+        'SELECT * FROM bot_epoch_snapshots ORDER BY epoch_number DESC LIMIT 1'
+      )
+      const previous = snapRes.rows.length > 0 ? snapRes.rows[0] : null
+      const previousSnapshot = previous ? {
+        validatorList:     previous.validator_list ?? [],
+        validatorsElected: previous.validators_elected,
+        validatorsJailed:  previous.validators_jailed,
+      } : null
+
+      const status       = await require('./epochService').getNodeStatus()
+      const currentEpoch = status.epochNumber
+
+      await runPersonalAlerts(pool, bot, currentEpoch, previousSnapshot)
+
+      await ctx.reply('✅ Alertas personalizadas ejecutadas\\.', { parse_mode: 'MarkdownV2' })
+    } catch (err) {
+      console.error('[testalerts] Error:', err.message)
+      await ctx.reply(`❌ Error: ${escapeMarkdown(err.message)}`, { parse_mode: 'MarkdownV2' })
+    }
+  })
+
   return bot
 }
 

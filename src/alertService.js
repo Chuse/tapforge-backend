@@ -113,7 +113,7 @@ async function checkKlvStakingAlert(bot, telegramId, kleverAddress, currentEpoch
   )
 }
 
-// ─── Alerta de recompensas KLV Allowance (delegación) ────────────────────────
+// ─── Alerta de recompensas KLV Allowance (delegación + KFI) ─────────────────
 
 async function checkKlvAllowanceAlert(bot, telegramId, kleverAddress, currentEpoch) {
   const lastAllowanceEpoch = await fetchLastAllowanceClaimEpoch(kleverAddress)
@@ -123,65 +123,31 @@ async function checkKlvAllowanceAlert(bot, telegramId, kleverAddress, currentEpo
   const epochsRemaining = MAX_CLAIM_EPOCHS - epochsSince
   if (epochsRemaining > CLAIM_WARN_EPOCHS || epochsRemaining <= 0) return
 
-  // Obtener importe pendiente
+  // Obtener importes pendientes
   let pendingKlv = 0
+  let hasKfi     = false
   try {
     const res  = await fetch(`${KLEVER_API}/v1.0/address/${kleverAddress}/allowance`)
     const json = await res.json()
     pendingKlv = (json?.data?.result?.allowance ?? 0) / 1_000_000
+    // Si tiene KFI frozen, las recompensas KFI también van aquí
+    hasKfi = !!json?.data?.result?.allStakingRewards?.find(r => r.assetId === 'KFI')
   } catch {}
+
+  const kfiNote = hasKfi ? ' (incluye recompensas de KFI)' : ''
 
   await bot.telegram.sendMessage(
     telegramId,
-    `⚠️ <b>Recompensas de Delegación KLV próximas a caducar</b>\n\n` +
+    `⚠️ <b>Recompensas de Delegación y KFI próximas a caducar</b>\n\n` +
     `Wallet: <code>${escapeHtml(kleverAddress)}</code>\n\n` +
-    `Pendiente: <b>${pendingKlv.toFixed(6)} KLV</b>\n` +
+    `Pendiente: <b>${pendingKlv.toFixed(6)} KLV</b>${escapeHtml(kfiNote)}\n` +
     `Te quedan <b>${epochsRemaining} épocas</b> (~${epochsToHours(epochsRemaining)}h) para reclamar.\n\n` +
     `Último AllowanceClaim: época <b>${lastAllowanceEpoch}</b>\n` +
     `Caduca en: época <b>${lastAllowanceEpoch + MAX_CLAIM_EPOCHS}</b>\n\n` +
-    `Reclama cuanto antes desde Desna Wallet para no perder tus recompensas de delegación.`,
+    `Reclama cuanto antes desde Desna Wallet para no perder tus recompensas.`,
     { parse_mode: 'HTML' }
   )
 }
-
-// ─── Alerta de recompensas KFI ───────────────────────────────────────────────
-
-async function checkKfiAlert(bot, telegramId, kleverAddress, currentEpoch, account) {
-  const kfiAsset = account.assets?.KFI
-  if (!kfiAsset) return
-
-  const lastClaimEpoch = kfiAsset.lastClaim?.epoch ?? 0
-  if (lastClaimEpoch === 0) return
-
-  const epochsSince     = currentEpoch - lastClaimEpoch
-  const epochsRemaining = MAX_CLAIM_EPOCHS - epochsSince
-  if (epochsRemaining > CLAIM_WARN_EPOCHS || epochsRemaining <= 0) return
-
-  // Obtener importe pendiente KFI
-  let pendingKfi = 0
-  try {
-    const res  = await fetch(`${KLEVER_API}/v1.0/address/${kleverAddress}/allowance`)
-    const json = await res.json()
-    const all  = json?.data?.result?.allStakingRewards ?? []
-    const kfi  = all.find(r => r.assetId === 'KFI')
-    if (kfi) pendingKfi = kfi.rewards / Math.pow(10, kfi.precision ?? 6)
-  } catch {}
-
-  if (pendingKfi === 0) return
-
-  await bot.telegram.sendMessage(
-    telegramId,
-    `⚠️ <b>Recompensas de KFI próximas a caducar</b>\n\n` +
-    `Wallet: <code>${escapeHtml(kleverAddress)}</code>\n\n` +
-    `Pendiente: <b>${pendingKfi.toFixed(6)} KFI</b>\n` +
-    `Te quedan <b>${epochsRemaining} épocas</b> (~${epochsToHours(epochsRemaining)}h) para reclamar.\n\n` +
-    `Último claim KFI: época <b>${lastClaimEpoch}</b>\n` +
-    `Caduca en: época <b>${lastClaimEpoch + MAX_CLAIM_EPOCHS}</b>\n\n` +
-    `Reclama cuanto antes desde Desna Wallet para no perder tus recompensas KFI.`,
-    { parse_mode: 'HTML' }
-  )
-}
-
 // ─── Alerta de cambio de comisión ────────────────────────────────────────────
 
 async function checkCommissionAlerts(bot, telegramId, kleverAddress, previousSnapshot, account) {
@@ -239,7 +205,6 @@ async function processUserAlerts(bot, telegramId, kleverAddress, currentEpoch, p
   await Promise.all([
     checkKlvStakingAlert(bot, telegramId, kleverAddress, currentEpoch, account),
     checkKlvAllowanceAlert(bot, telegramId, kleverAddress, currentEpoch),
-    checkKfiAlert(bot, telegramId, kleverAddress, currentEpoch, account),
     checkCommissionAlerts(bot, telegramId, kleverAddress, previousSnapshot, account),
   ])
 }
