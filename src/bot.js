@@ -10,6 +10,7 @@ const crypto       = require('crypto')
 
 const { collectEpochSnapshot, saveEpochSnapshot, getPreviousSnapshot } = require('./epochService')
 const { buildEpochReport, buildEpochMessages }                          = require('./reportService')
+const { runPersonalAlerts, getDelegationsSummary }                      = require('./alertService')
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -26,6 +27,13 @@ const COINGECKO  = 'https://api.coingecko.com/api/v3'
 
 function escapeMarkdown(text) {
   return String(text).replace(/[_*[\]()~`>#+=|{}.!\-]/g, '\\$&')
+}
+
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
 
 function generatePaymentCode() {
@@ -164,8 +172,8 @@ function createBot(pool) {
       `en el canal privado de suscriptores\\.\n\n` +
       `*Comandos disponibles:*\n` +
       `/suscribir — obtén acceso al canal premium\n` +
-      `/estado — ver tu suscripción\n` +
-      `/validador \\[dirección\\] — registrar alertas de validador\n`,
+      `/wallet \\[klv1\\.\\.\\.\\] — registrar tu dirección para alertas personalizadas\n` +
+      `/estado — ver tu suscripción y delegaciones activas\n`,
       { parse_mode: 'MarkdownV2' }
     )
   })
@@ -346,14 +354,14 @@ function createBot(pool) {
     )
   })
 
-  // /validador [dirección]
-  bot.command('validador', async (ctx) => {
+  // /wallet [klv1...]
+  bot.command('wallet', async (ctx) => {
     const telegramId = ctx.from.id
     const args       = ctx.message.text.split(' ').slice(1)
     const address    = args[0]?.trim()
 
     if (!address || !address.startsWith('klv1')) {
-      return ctx.reply('Uso: /validador \\[dirección klv1\\.\\.\\.\\.\\]', { parse_mode: 'MarkdownV2' })
+      return ctx.reply('Uso: /wallet \\[tu dirección klv1\\.\\.\\.\\.\\]', { parse_mode: 'MarkdownV2' })
     }
 
     const sub = await pool.query(
@@ -364,31 +372,46 @@ function createBot(pool) {
       return ctx.reply('❌ Necesitas suscripción activa\\. Usa /suscribir\\.', { parse_mode: 'MarkdownV2' })
     }
 
+    await ctx.reply('🔍 Verificando dirección\\.\\.\\.', { parse_mode: 'MarkdownV2' })
+
     try {
-      const res  = await fetch(`${KLEVER_API}/v1.0/validator/${address}`)
-      const json = await res.json()
-      if (json.error || !json.data) {
-        return ctx.reply('❌ Validador no encontrado en la red Klever\\.', { parse_mode: 'MarkdownV2' })
+      const summary = await getDelegationsSummary(address)
+      if (!summary) {
+        return ctx.reply('❌ Dirección no encontrada en la red Klever\\.', { parse_mode: 'MarkdownV2' })
       }
-    } catch {
-      return ctx.reply('❌ Error al verificar el validador\\. Inténtalo más tarde\\.', { parse_mode: 'MarkdownV2' })
+
+      // Guardar dirección
+      await pool.query(
+        'UPDATE bot_subscribers SET klever_address = $1 WHERE telegram_id = $2',
+        [address, telegramId]
+      )
+
+      // Construir resumen de delegaciones
+      let delegText = '<i>Sin delegaciones activas</i>'
+      if (summary.delegations.length > 0) {
+        delegText = summary.delegations
+          .map((d, i) => `  ${i + 1}. <b>${escapeHtml(d.validatorName || d.validatorAddr.slice(0, 10) + '...')}</b> — ${d.balance.toFixed(2)} KLV`)
+          .join('\n')
+      }
+
+      const epochsInfo = summary.lastClaimEpoch > 0
+        ? `Último claim: época <b>${summary.lastClaimEpoch}</b>`
+        : `Sin claims registrados`
+
+      await ctx.replyWithHTML(
+        `✅ <b>Dirección registrada</b>\n\n` +
+        `<code>${address}</code>\n\n` +
+        `<b>KLV frozen:</b> ${(summary.frozenBalance).toFixed(2)} KLV\n` +
+        `${epochsInfo}\n\n` +
+        `<b>Delegaciones activas:</b>\n${delegText}\n\n` +
+        `Recibirás alertas si:\n` +
+        `• Tus recompensas KLV están próximas a caducar\n` +
+        `• Un validador donde tienes KLV delegados cambia su comisión`
+      )
+    } catch (err) {
+      console.error('[bot] Error en /wallet:', err.message)
+      await ctx.reply('❌ Error al verificar la dirección\\. Inténtalo más tarde\\.', { parse_mode: 'MarkdownV2' })
     }
-
-    await pool.query(
-      `INSERT INTO bot_validator_alerts (telegram_id, validator_address)
-       VALUES ($1, $2)
-       ON CONFLICT (telegram_id, validator_address) DO NOTHING`,
-      [telegramId, address]
-    )
-
-    await ctx.reply(
-      `✅ Validador registrado para alertas:\n\`${escapeMarkdown(address)}\`\n\n` +
-      `Recibirás notificaciones si:\n` +
-      `• Es deseleccionado\n` +
-      `• Entra en jail\n` +
-      `• Vuelve a ser elegido`,
-      { parse_mode: 'MarkdownV2' }
-    )
   })
 
   // /test — solo admin
@@ -438,6 +461,7 @@ function startEpochCron(pool, bot) {
       }
 
       await sendValidatorAlerts(pool, bot, snapshot, previous)
+      await runPersonalAlerts(pool, bot, snapshot.epochNumber, previous)
 
       console.log(`[cron] Época ${snapshot.epochNumber} publicada correctamente`)
     } catch (err) {
