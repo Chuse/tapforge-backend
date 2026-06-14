@@ -159,7 +159,7 @@ function createBot(pool) {
     const name = escapeMarkdown(ctx.from?.first_name ?? 'Anon')
     await ctx.reply(
       `👋 Hola ${name}\\!\n\n` +
-      `Soy *Desna*, tu asistente de inteligencia de red Klever\\.\n\n` +
+      `Soy *Desna*, tu asistente de inteligencia de Desna Wallet\\.\n\n` +
       `Publico un informe detallado al cierre de cada época \\(cada 6 horas\\) ` +
       `en el canal privado de suscriptores\\.\n\n` +
       `*Comandos disponibles:*\n` +
@@ -389,6 +389,31 @@ function createBot(pool) {
       `• Vuelve a ser elegido`,
       { parse_mode: 'MarkdownV2' }
     )
+  })
+
+  // /test — solo admin
+  bot.command('test', async (ctx) => {
+    if (ctx.from.id !== ADMIN_TELEGRAM_ID) return
+
+    await ctx.reply('⏳ Generando informe de prueba\\.\\.\\.', { parse_mode: 'MarkdownV2' })
+
+    try {
+      const snapshot = await collectEpochSnapshot()
+      const previous = await getPreviousSnapshot(pool, snapshot.epochNumber)
+
+      await saveEpochSnapshot(pool, snapshot)
+
+      const report = buildEpochReport(snapshot, previous)
+
+      await bot.telegram.sendMessage(PRIVATE_CHANNEL_ID, report, {
+        parse_mode: 'MarkdownV2',
+      })
+
+      await ctx.reply('✅ Informe publicado en el canal\\.', { parse_mode: 'MarkdownV2' })
+    } catch (err) {
+      console.error('[test] Error:', err.message)
+      await ctx.reply(`❌ Error: ${escapeMarkdown(err.message)}`, { parse_mode: 'MarkdownV2' })
+    }
   })
 
   return bot
