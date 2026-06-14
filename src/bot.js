@@ -163,7 +163,7 @@ function fmt(n, decimals = 2) {
   return Number(n).toLocaleString('en-US', { maximumFractionDigits: decimals })
 }
 
-function buildWalletSummary(address, summary, title) {
+function buildWalletSummary(address, summary, title, validatorList = []) {
   const lines = []
   lines.push(`${title}\n`)
   lines.push(`<code>${escapeHtml(address)}</code>\n`)
@@ -180,7 +180,19 @@ function buildWalletSummary(address, summary, title) {
     for (let i = 0; i < summary.delegations.length; i++) {
       const d    = summary.delegations[i]
       const name = escapeHtml(d.validatorName || `${d.validatorAddr.slice(0, 10)}...`)
-      lines.push(`  ${i + 1}. <b>${name}</b> — ${escapeHtml(fmt(d.balance))} KLV`)
+
+      // Estado del validador desde el snapshot
+      let statusTag = ''
+      if (validatorList.length > 0) {
+        const v = validatorList.find(v => v.address === d.validatorAddr)
+        if (v) {
+          if (v.jailed)         statusTag = ' <i>(en jail)</i>'
+          else if (v.waiting)   statusTag = ' <i>(en espera)</i>'
+          else if (v.inactive)  statusTag = ' <i>(inactivo)</i>'
+        }
+      }
+
+      lines.push(`  ${i + 1}. <b>${name}</b> — ${escapeHtml(fmt(d.balance))} KLV${statusTag}`)
     }
   } else {
     lines.push(`\n<i>Sin delegaciones activas</i>`)
@@ -393,6 +405,12 @@ function createBot(pool) {
       )
     }
 
+    // Obtener lista de validadores del último snapshot (una sola vez)
+    const snapRes = await pool.query(
+      'SELECT validator_list FROM bot_epoch_snapshots ORDER BY epoch_number DESC LIMIT 1'
+    )
+    const validatorList = snapRes.rows[0]?.validator_list ?? []
+
     for (let i = 0; i < wallets.rows.length; i++) {
       const addr = wallets.rows[i].klever_address
       try {
@@ -401,7 +419,7 @@ function createBot(pool) {
           await ctx.replyWithHTML(`👛 <b>Wallet ${i + 1}</b>\n<code>${escapeHtml(addr)}</code>\n\n<i>No se pudo obtener información.</i>`)
           continue
         }
-        await ctx.replyWithHTML(buildWalletSummary(addr, summary, `👛 <b>Wallet ${i + 1}</b>`))
+        await ctx.replyWithHTML(buildWalletSummary(addr, summary, `👛 <b>Wallet ${i + 1}</b>`, validatorList))
       } catch (err) {
         console.error(`[bot] Error obteniendo wallet ${addr}:`, err.message)
       }
@@ -504,7 +522,13 @@ function createBot(pool) {
         [telegramId, newAddress]
       )
 
-      await ctx.replyWithHTML(buildWalletSummary(newAddress, summary, '✅ <b>Wallet registrada</b>'))
+      // Obtener lista de validadores del último snapshot
+      const snapRes = await pool.query(
+        'SELECT validator_list FROM bot_epoch_snapshots ORDER BY epoch_number DESC LIMIT 1'
+      )
+      const validatorList = snapRes.rows[0]?.validator_list ?? []
+
+      await ctx.replyWithHTML(buildWalletSummary(newAddress, summary, '✅ <b>Wallet registrada</b>', validatorList))
     } catch (err) {
       console.error('[bot] Error en /wallet:', err.message)
       await ctx.replyWithHTML('❌ Error al verificar la dirección. Inténtalo más tarde.')
