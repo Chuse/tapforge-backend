@@ -203,22 +203,23 @@ async function checkCommissionAlerts(bot, telegramId, kleverAddress, previousSna
 
 // ─── Resumen personal: incidencias y cambios de comisión ─────────────────────
 
-async function buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch, previousSnapshot, account) {
+async function buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch, currentSnapshot, previousSnapshot, account) {
   const delegations = getActiveDelegations(account)
   if (!delegations.length) return
 
-  const lines        = []
-  const incidencias  = []
-  const comisiones   = []
+  const lines       = []
+  const incidencias = []
+  const comisiones  = []
 
-  // Validadores con incidencias (inactivo o en jail)
-  // Cruzamos con el snapshot de validadores
-  const validatorList = previousSnapshot?.validatorList ?? []
+  // Estado actual de validadores — usamos el snapshot ACTUAL
+  const currentValidatorList  = currentSnapshot?.validatorList  ?? []
+  // Comisiones anteriores — usamos el snapshot ANTERIOR
+  const previousValidatorList = previousSnapshot?.validatorList ?? []
 
+  // Validadores con incidencias (inactivo o en jail) — estado ACTUAL
   for (const d of delegations) {
-    const v = validatorList.find(v => v.address === d.validatorAddr)
+    const v = currentValidatorList.find(v => v.address === d.validatorAddr)
     if (!v) continue
-
     if (v.jailed) {
       incidencias.push({ name: d.validatorName || shortAddr(d.validatorAddr), balance: d.balance, estado: 'en jail' })
     } else if (v.inactive) {
@@ -226,30 +227,26 @@ async function buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch
     }
   }
 
-  // Cambios de comisión
+  // Cambios de comisión — comparar snapshot ANTERIOR con estado ACTUAL
   for (const d of delegations) {
-    const prevValidator = validatorList.find(v => v.address === d.validatorAddr)
+    const prevValidator = previousValidatorList.find(v => v.address === d.validatorAddr)
     if (!prevValidator) continue
 
-    try {
-      const res  = await fetch(`${KLEVER_API}/v1.0/validator/${d.validatorAddr}`)
-      const json = await res.json()
-      const currCommission = json?.data?.validator?.commission ?? null
-      if (currCommission === null) continue
-      if (currCommission === prevValidator.commission) continue
+    const currValidator = currentValidatorList.find(v => v.address === d.validatorAddr)
+    if (!currValidator) continue
 
-      const prevPct  = (prevValidator.commission / 100).toFixed(2)
-      const currPct  = (currCommission / 100).toFixed(2)
-      const arrow    = currCommission > prevValidator.commission ? '↑' : '↓'
-      comisiones.push({
-        name:    d.validatorName || shortAddr(d.validatorAddr),
-        balance: d.balance,
-        prevPct, currPct, arrow
-      })
-    } catch {}
+    if (currValidator.commission === prevValidator.commission) continue
+
+    const prevPct = (prevValidator.commission / 100).toFixed(2)
+    const currPct = (currValidator.commission / 100).toFixed(2)
+    const arrow   = currValidator.commission > prevValidator.commission ? '↑' : '↓'
+    comisiones.push({
+      name:    d.validatorName || shortAddr(d.validatorAddr),
+      balance: d.balance,
+      prevPct, currPct, arrow
+    })
   }
 
-  // Si no hay nada que reportar, no enviamos nada
   if (incidencias.length === 0 && comisiones.length === 0) return
 
   lines.push(`📊 <b>TU RESUMEN PERSONAL — Época ${currentEpoch}</b>`)
@@ -282,7 +279,7 @@ async function buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch
 const BATCH_SIZE     = 10
 const BATCH_DELAY_MS = 1000
 
-async function processUserAlerts(bot, telegramId, kleverAddress, currentEpoch, previousSnapshot) {
+async function processUserAlerts(bot, telegramId, kleverAddress, currentEpoch, currentSnapshot, previousSnapshot) {
   const account = await fetchAccountData(kleverAddress)
   if (!account) return
 
@@ -290,11 +287,11 @@ async function processUserAlerts(bot, telegramId, kleverAddress, currentEpoch, p
     checkKlvStakingAlert(bot, telegramId, kleverAddress, currentEpoch, account),
     checkKlvAllowanceAlert(bot, telegramId, kleverAddress, currentEpoch),
     checkCommissionAlerts(bot, telegramId, kleverAddress, previousSnapshot, account),
-    buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch, previousSnapshot, account),
+    buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch, currentSnapshot, previousSnapshot, account),
   ])
 }
 
-async function runPersonalAlerts(pool, bot, currentEpoch, previousSnapshot) {
+async function runPersonalAlerts(pool, bot, currentEpoch, currentSnapshot, previousSnapshot) {
   const res = await pool.query(`
     SELECT bs.telegram_id, bw.klever_address
     FROM bot_subscribers bs
@@ -311,7 +308,7 @@ async function runPersonalAlerts(pool, bot, currentEpoch, previousSnapshot) {
 
     await Promise.all(
       batch.map(({ telegram_id, klever_address }) =>
-        processUserAlerts(bot, telegram_id, klever_address, currentEpoch, previousSnapshot)
+        processUserAlerts(bot, telegram_id, klever_address, currentEpoch, currentSnapshot, previousSnapshot)
           .catch(err => console.error(`[alertService] Error ${klever_address}:`, err.message))
       )
     )

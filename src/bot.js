@@ -567,20 +567,19 @@ function createBot(pool) {
     await ctx.reply('⏳ Ejecutando alertas personalizadas de prueba\\.\\.\\.', { parse_mode: 'MarkdownV2' })
 
     try {
-      const snapRes  = await pool.query(
-        'SELECT * FROM bot_epoch_snapshots ORDER BY epoch_number DESC LIMIT 1'
+      const snapRes   = await pool.query(
+        'SELECT * FROM bot_epoch_snapshots ORDER BY epoch_number DESC LIMIT 2'
       )
-      const previous = snapRes.rows.length > 0 ? snapRes.rows[0] : null
-      const previousSnapshot = previous ? {
-        validatorList:     previous.validator_list ?? [],
-        validatorsElected: previous.validators_elected,
-        validatorsJailed:  previous.validators_jailed,
-      } : null
+      const current  = snapRes.rows[0] ?? null
+      const previous = snapRes.rows[1] ?? null
+
+      const currentSnapshot  = current  ? { validatorList: current.validator_list  ?? [], validatorsElected: current.validators_elected,  validatorsJailed: current.validators_jailed  } : null
+      const previousSnapshot = previous ? { validatorList: previous.validator_list ?? [], validatorsElected: previous.validators_elected, validatorsJailed: previous.validators_jailed } : null
 
       const status       = await require('./epochService').getNodeStatus()
       const currentEpoch = status.epochNumber
 
-      await runPersonalAlerts(pool, bot, currentEpoch, previousSnapshot)
+      await runPersonalAlerts(pool, bot, currentEpoch, currentSnapshot, previousSnapshot)
 
       await ctx.reply('✅ Alertas personalizadas ejecutadas\\.', { parse_mode: 'MarkdownV2' })
     } catch (err) {
@@ -611,7 +610,7 @@ function startEpochCron(pool, bot) {
       }
 
       await sendValidatorAlerts(pool, bot, snapshot, previous)
-      await runPersonalAlerts(pool, bot, snapshot.epochNumber, previous)
+      await runPersonalAlerts(pool, bot, snapshot.epochNumber, snapshot, previous)
 
       console.log(`[cron] Época ${snapshot.epochNumber} publicada correctamente`)
     } catch (err) {
