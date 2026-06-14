@@ -11,10 +11,10 @@ function fmt(n, decimals = 2) {
 }
 
 function fmtKlv(n) {
-  if (n >= 1_000_000_000) return `${fmt(n / 1_000_000_000, 2)}B KLV`
-  if (n >= 1_000_000)     return `${fmt(n / 1_000_000,     2)}M KLV`
-  if (n >= 1_000)         return `${fmt(n / 1_000,         2)}K KLV`
-  return `${fmt(n, 2)} KLV`
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B KLV`
+  if (n >= 1_000_000)     return `${(n / 1_000_000).toFixed(2)}M KLV`
+  if (n >= 1_000)         return `${(n / 1_000).toFixed(1)}K KLV`
+  return `${n.toFixed(2)} KLV`
 }
 
 function escapeHtml(text) {

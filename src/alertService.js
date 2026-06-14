@@ -1,10 +1,10 @@
 /**
  * alertService.js
  * Alertas personalizadas por usuario al cierre de cada época
- * - Recompensas KLV Staking próximas a caducar (lastClaim del asset)
- * - Recompensas KLV Allowance próximas a caducar (última tx AllowanceClaim)
- * - Recompensas KFI próximas a caducar (lastClaim del asset KFI)
+ * - Recompensas KLV Staking próximas a caducar
+ * - Recompensas KLV Allowance (delegación) próximas a caducar
  * - Cambio de comisión en validadores delegados
+ * - Resumen personal: validadores con incidencias y cambios de comisión
  */
 
 const KLEVER_API        = 'https://api.mainnet.klever.org'
@@ -27,6 +27,12 @@ function shortAddr(addr) {
 
 function epochsToHours(epochs) {
   return epochs * 6
+}
+
+function fmtKlv(n) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M KLV`
+  if (n >= 1_000)     return `${(n / 1_000).toFixed(1)}K KLV`
+  return `${n.toFixed(2)} KLV`
 }
 
 // ─── Leer datos de cuenta ─────────────────────────────────────────────────────
@@ -104,11 +110,12 @@ async function checkKlvStakingAlert(bot, telegramId, kleverAddress, currentEpoch
     telegramId,
     `⚠️ <b>Recompensas de Staking KLV próximas a caducar</b>\n\n` +
     `Wallet: <code>${escapeHtml(kleverAddress)}</code>\n\n` +
-    `Pendiente: <b>${pendingKlv.toFixed(6)} KLV</b>\n` +
+    `Pendiente: <b>${fmtKlv(pendingKlv)}</b>\n` +
     `Te quedan <b>${epochsRemaining} épocas</b> (~${epochsToHours(epochsRemaining)}h) para reclamar.\n\n` +
     `Último StakingClaim: época <b>${lastClaimEpoch}</b>\n` +
     `Caduca en: época <b>${lastClaimEpoch + MAX_CLAIM_EPOCHS}</b>\n\n` +
-    `Reclama cuanto antes desde Desna Wallet para no perder tus recompensas.`,
+    `Reclama cuanto antes desde Desna Wallet para no perder tus recompensas.\n\n` +
+    `<i>Desna · La wallet que te entiende</i>`,
     { parse_mode: 'HTML' }
   )
 }
@@ -140,11 +147,12 @@ async function checkKlvAllowanceAlert(bot, telegramId, kleverAddress, currentEpo
     telegramId,
     `⚠️ <b>Recompensas de Delegación y KFI próximas a caducar</b>\n\n` +
     `Wallet: <code>${escapeHtml(kleverAddress)}</code>\n\n` +
-    `Pendiente: <b>${pendingKlv.toFixed(6)} KLV</b>${escapeHtml(kfiNote)}\n` +
+    `Pendiente: <b>${fmtKlv(pendingKlv)}</b>${escapeHtml(kfiNote)}\n` +
     `Te quedan <b>${epochsRemaining} épocas</b> (~${epochsToHours(epochsRemaining)}h) para reclamar.\n\n` +
     `Último AllowanceClaim: época <b>${lastAllowanceEpoch}</b>\n` +
     `Caduca en: época <b>${lastAllowanceEpoch + MAX_CLAIM_EPOCHS}</b>\n\n` +
-    `Reclama cuanto antes desde Desna Wallet para no perder tus recompensas.`,
+    `Reclama cuanto antes desde Desna Wallet para no perder tus recompensas.\n\n` +
+    `<i>Desna · La wallet que te entiende</i>`,
     { parse_mode: 'HTML' }
   )
 }
@@ -193,6 +201,82 @@ async function checkCommissionAlerts(bot, telegramId, kleverAddress, previousSna
   }
 }
 
+// ─── Resumen personal: incidencias y cambios de comisión ─────────────────────
+
+async function buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch, previousSnapshot, account) {
+  const delegations = getActiveDelegations(account)
+  if (!delegations.length) return
+
+  const lines        = []
+  const incidencias  = []
+  const comisiones   = []
+
+  // Validadores con incidencias (inactivo o en jail)
+  // Cruzamos con el snapshot de validadores
+  const validatorList = previousSnapshot?.validatorList ?? []
+
+  for (const d of delegations) {
+    const v = validatorList.find(v => v.address === d.validatorAddr)
+    if (!v) continue
+
+    if (v.jailed) {
+      incidencias.push({ name: d.validatorName || shortAddr(d.validatorAddr), balance: d.balance, estado: 'en jail' })
+    } else if (v.inactive) {
+      incidencias.push({ name: d.validatorName || shortAddr(d.validatorAddr), balance: d.balance, estado: 'inactivo' })
+    }
+  }
+
+  // Cambios de comisión
+  for (const d of delegations) {
+    const prevValidator = validatorList.find(v => v.address === d.validatorAddr)
+    if (!prevValidator) continue
+
+    try {
+      const res  = await fetch(`${KLEVER_API}/v1.0/validator/${d.validatorAddr}`)
+      const json = await res.json()
+      const currCommission = json?.data?.validator?.commission ?? null
+      if (currCommission === null) continue
+      if (currCommission === prevValidator.commission) continue
+
+      const prevPct  = (prevValidator.commission / 100).toFixed(2)
+      const currPct  = (currCommission / 100).toFixed(2)
+      const arrow    = currCommission > prevValidator.commission ? '↑' : '↓'
+      comisiones.push({
+        name:    d.validatorName || shortAddr(d.validatorAddr),
+        balance: d.balance,
+        prevPct, currPct, arrow
+      })
+    } catch {}
+  }
+
+  // Si no hay nada que reportar, no enviamos nada
+  if (incidencias.length === 0 && comisiones.length === 0) return
+
+  lines.push(`📊 <b>TU RESUMEN PERSONAL — Época ${currentEpoch}</b>`)
+  lines.push(`Wallet: <code>${escapeHtml(kleverAddress)}</code>\n`)
+
+  if (incidencias.length > 0) {
+    lines.push(`⚠️ <b>Validadores con incidencias:</b>`)
+    for (const v of incidencias) {
+      lines.push(`  • ${escapeHtml(v.name)} — ${escapeHtml(fmtKlv(v.balance))} <i>(${v.estado})</i>`)
+    }
+    lines.push('')
+  }
+
+  if (comisiones.length > 0) {
+    lines.push(`📉 <b>Cambios de comisión:</b>`)
+    for (const v of comisiones) {
+      lines.push(`  • <b>${escapeHtml(v.name)}</b> — ${escapeHtml(fmtKlv(v.balance))}`)
+      lines.push(`    ${v.prevPct}% → ${v.currPct}% ${v.arrow}`)
+    }
+    lines.push('')
+  }
+
+  lines.push(`<i>Desna · La wallet que te entiende</i>`)
+
+  await bot.telegram.sendMessage(telegramId, lines.join('\n'), { parse_mode: 'HTML' })
+}
+
 // ─── Ejecutar todas las alertas en lotes ─────────────────────────────────────
 
 const BATCH_SIZE     = 10
@@ -206,6 +290,7 @@ async function processUserAlerts(bot, telegramId, kleverAddress, currentEpoch, p
     checkKlvStakingAlert(bot, telegramId, kleverAddress, currentEpoch, account),
     checkKlvAllowanceAlert(bot, telegramId, kleverAddress, currentEpoch),
     checkCommissionAlerts(bot, telegramId, kleverAddress, previousSnapshot, account),
+    buildPersonalSummary(bot, telegramId, kleverAddress, currentEpoch, previousSnapshot, account),
   ])
 }
 
