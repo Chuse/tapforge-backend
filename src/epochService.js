@@ -8,6 +8,37 @@ const KLEVER_API  = 'https://api.mainnet.klever.org'
 const KLEVER_NODE = 'https://node.mainnet.klever.org'
 const COINGECKO   = 'https://api.coingecko.com/api/v3'
 
+// ─── Mapa de tipos de contrato Klever ─────────────────────────────────────────
+
+const TX_TYPE_MAP = {
+  0:  'Transfer',
+  1:  'CreateAsset',
+  2:  'CreateValidator',
+  3:  'ValidatorConfig',
+  4:  'Freeze',
+  5:  'Unfreeze',
+  6:  'Delegate',
+  7:  'Undelegate',
+  8:  'Withdraw',
+  9:  'Claim',
+  10: 'Unjail',
+  11: 'AssetTrigger',
+  12: 'SetAccountName',
+  13: 'Proposal',
+  14: 'Vote',
+  15: 'ConfigITO',
+  16: 'SetITOPrices',
+  17: 'Buy',
+  18: 'Sell',
+  19: 'CancelMarketOrder',
+  20: 'CreateMarketplace',
+  21: 'ConfigMarketplace',
+  22: 'UpdateAccountPermission',
+  23: 'Deposit',
+  24: 'ITOTrigger',
+  63: 'SmartContract',
+}
+
 // ─── Node status ──────────────────────────────────────────────────────────────
 
 async function getNodeStatus() {
@@ -63,15 +94,18 @@ async function fetchValidators() {
     if (list.length === 0) break
 
     for (const v of list) {
+      // El campo "list" indica el estado: "eligible", "waiting", "jailed", "new"
+      const listStatus = v.list ?? ''
       all.push({
         address:    v.ownerAddress ?? v.address ?? '',
         name:       v.name ?? '',
-        elected:    v.elected    ?? false,
-        jailed:     v.jailed     ?? false,
-        inactive:   !v.active    ?? false,
-        waiting:    v.waiting    ?? false,
+        elected:    listStatus === 'eligible',
+        jailed:     v.jailed === true || listStatus === 'jailed',
+        inactive:   listStatus === 'new' || listStatus === '',
+        waiting:    listStatus === 'waiting',
         stake:      v.totalStake ?? 0,
         commission: v.commission ?? 0,
+        listStatus,
       })
     }
 
@@ -146,11 +180,20 @@ async function fetchEpochTxStats(nonceStart, nonceEnd) {
 
       const contracts = Array.isArray(tx.contract) ? tx.contract : []
       for (const c of contracts) {
-        const type = c.type ?? c.typeString ?? 'Unknown'
+        // Usar typeString si existe, si no mapear el número
+        const type = c.typeString ?? TX_TYPE_MAP[c.type] ?? `Type${c.type}`
         contractCount[type] = (contractCount[type] ?? 0) + 1
 
-        const asset = c.parameter?.assetId ?? c.parameter?.asset ?? null
-        if (asset) {
+        // Recopilar assets — incluye callValue para SmartContracts
+        const assets = []
+        if (c.parameter?.assetId) assets.push(c.parameter.assetId)
+        if (c.parameter?.asset)   assets.push(c.parameter.asset)
+        if (Array.isArray(c.parameter?.callValue)) {
+          for (const cv of c.parameter.callValue) {
+            if (cv.asset) assets.push(cv.asset)
+          }
+        }
+        for (const asset of assets) {
           const ticker = asset.split('-')[0]
           kdaCount[ticker] = (kdaCount[ticker] ?? 0) + 1
         }
