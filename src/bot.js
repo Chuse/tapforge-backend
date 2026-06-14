@@ -354,16 +354,14 @@ function createBot(pool) {
     )
   })
 
-  // /wallet [klv1...]
+  // /wallet — gestión de wallets (máx 3)
   bot.command('wallet', async (ctx) => {
     const telegramId = ctx.from.id
     const args       = ctx.message.text.split(' ').slice(1)
-    const address    = args[0]?.trim()
+    const action     = args[0]?.trim().toLowerCase()
+    const address    = args[1]?.trim() ?? args[0]?.trim()
 
-    if (!address || !address.startsWith('klv1')) {
-      return ctx.reply('Uso: /wallet \\[tu dirección klv1\\.\\.\\.\\.\\]', { parse_mode: 'MarkdownV2' })
-    }
-
+    // Verificar suscripción
     const sub = await pool.query(
       'SELECT active FROM bot_subscribers WHERE telegram_id = $1',
       [telegramId]
@@ -372,25 +370,93 @@ function createBot(pool) {
       return ctx.reply('❌ Necesitas suscripción activa\\. Usa /suscribir\\.', { parse_mode: 'MarkdownV2' })
     }
 
-    await ctx.reply('🔍 Verificando dirección\\.\\.\\.', { parse_mode: 'MarkdownV2' })
+    // /wallet sin argumentos — listar wallets
+    if (!action) {
+      const wallets = await pool.query(
+        'SELECT klever_address, created_at FROM bot_wallets WHERE telegram_id = $1 ORDER BY created_at ASC',
+        [telegramId]
+      )
+      if (wallets.rows.length === 0) {
+        return ctx.replyWithHTML(
+          `📭 <b>Sin wallets registradas</b>\n\n` +
+          `Usa <code>/wallet klv1...</code> para añadir tu dirección KLV.\n` +
+          `Puedes registrar hasta 3 wallets.`
+        )
+      }
+      const list = wallets.rows
+        .map((r, i) => `  ${i + 1}. <code>${escapeHtml(r.klever_address)}</code>`)
+        .join('\n')
+      return ctx.replyWithHTML(
+        `👛 <b>Tus wallets registradas</b>\n\n${list}\n\n` +
+        `Usa <code>/wallet eliminar klv1...</code> para eliminar una.`
+      )
+    }
+
+    // /wallet eliminar [klv1...]
+    if (action === 'eliminar') {
+      if (!address || !address.startsWith('klv1')) {
+        return ctx.reply('Uso: /wallet eliminar \\[klv1\\.\\.\\.\\.\\]', { parse_mode: 'MarkdownV2' })
+      }
+      const del = await pool.query(
+        'DELETE FROM bot_wallets WHERE telegram_id = $1 AND klever_address = $2 RETURNING id',
+        [telegramId, address]
+      )
+      if (del.rowCount === 0) {
+        return ctx.replyWithHTML(`❌ Esa dirección no está en tu lista.`)
+      }
+      return ctx.replyWithHTML(`✅ Wallet eliminada:\n<code>${escapeHtml(address)}</code>`)
+    }
+
+    // /wallet [klv1...] — añadir wallet
+    const newAddress = action.startsWith('klv1') ? action : null
+    if (!newAddress) {
+      return ctx.reply('Uso: /wallet \\[klv1\\.\\.\\.\\.\\]', { parse_mode: 'MarkdownV2' })
+    }
+
+    // Comprobar límite de 3
+    const count = await pool.query(
+      'SELECT COUNT(*) FROM bot_wallets WHERE telegram_id = $1',
+      [telegramId]
+    )
+    if (parseInt(count.rows[0].count) >= 3) {
+      return ctx.replyWithHTML(
+        `❌ <b>Límite alcanzado</b>\n\nYa tienes 3 wallets registradas.\n` +
+        `Elimina una con <code>/wallet eliminar klv1...</code> antes de añadir otra.`
+      )
+    }
+
+    // Verificar que no está duplicada
+    const existing = await pool.query(
+      'SELECT id FROM bot_wallets WHERE telegram_id = $1 AND klever_address = $2',
+      [telegramId, newAddress]
+    )
+    if (existing.rows.length > 0) {
+      return ctx.replyWithHTML(`ℹ️ Esa wallet ya está registrada.`)
+    }
+
+    await ctx.replyWithHTML('🔍 Verificando dirección...')
 
     try {
-      const summary = await getDelegationsSummary(address)
+      const summary = await getDelegationsSummary(newAddress)
       if (!summary) {
-        return ctx.reply('❌ Dirección no encontrada en la red Klever\\.', { parse_mode: 'MarkdownV2' })
+        return ctx.replyWithHTML('❌ Dirección no encontrada en la red Klever.')
       }
 
-      // Guardar dirección
+      // Guardar wallet
       await pool.query(
-        'UPDATE bot_subscribers SET klever_address = $1 WHERE telegram_id = $2',
-        [address, telegramId]
+        `INSERT INTO bot_wallets (telegram_id, klever_address)
+         VALUES ($1, $2)
+         ON CONFLICT (telegram_id, klever_address) DO NOTHING`,
+        [telegramId, newAddress]
       )
 
-      // Construir resumen de delegaciones
+      // Resumen de delegaciones
       let delegText = '<i>Sin delegaciones activas</i>'
       if (summary.delegations.length > 0) {
         delegText = summary.delegations
-          .map((d, i) => `  ${i + 1}. <b>${escapeHtml(d.validatorName || d.validatorAddr.slice(0, 10) + '...')}</b> — ${d.balance.toFixed(2)} KLV`)
+          .map((d, i) =>
+            `  ${i + 1}. <b>${escapeHtml(d.validatorName || d.validatorAddr.slice(0, 10) + '...')}</b> — ${d.balance.toFixed(2)} KLV`
+          )
           .join('\n')
       }
 
@@ -399,9 +465,9 @@ function createBot(pool) {
         : `Sin claims registrados`
 
       await ctx.replyWithHTML(
-        `✅ <b>Dirección registrada</b>\n\n` +
-        `<code>${address}</code>\n\n` +
-        `<b>KLV frozen:</b> ${(summary.frozenBalance).toFixed(2)} KLV\n` +
+        `✅ <b>Wallet registrada</b>\n\n` +
+        `<code>${escapeHtml(newAddress)}</code>\n\n` +
+        `<b>KLV frozen:</b> ${summary.frozenBalance.toFixed(2)} KLV\n` +
         `${epochsInfo}\n\n` +
         `<b>Delegaciones activas:</b>\n${delegText}\n\n` +
         `Recibirás alertas si:\n` +
@@ -410,7 +476,7 @@ function createBot(pool) {
       )
     } catch (err) {
       console.error('[bot] Error en /wallet:', err.message)
-      await ctx.reply('❌ Error al verificar la dirección\\. Inténtalo más tarde\\.', { parse_mode: 'MarkdownV2' })
+      await ctx.replyWithHTML('❌ Error al verificar la dirección. Inténtalo más tarde.')
     }
   })
 
