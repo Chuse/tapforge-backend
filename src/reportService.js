@@ -107,7 +107,7 @@ function buildMsg1(current, previous) {
   lines.push('')
 
   lines.push('─────────────────────')
-  lines.push('<i>Desna · Klever Network Intelligence</i>')
+  lines.push('<i>Desna · La wallet que te entiende</i>')
 
   return lines.join('\n')
 }
@@ -167,7 +167,7 @@ function buildMsg2(current, previous) {
   }
 
   lines.push('─────────────────────')
-  lines.push('<i>Desna · Klever Network Intelligence</i>')
+  lines.push('<i>Desna · La wallet que te entiende</i>')
 
   return lines.join('\n')
 }
@@ -206,7 +206,7 @@ function buildMsg3(current, previous) {
   }
 
   lines.push('─────────────────────')
-  lines.push('<i>Desna · Klever Network Intelligence</i>')
+  lines.push('<i>Desna · La wallet que te entiende</i>')
 
   return lines.join('\n')
 }
