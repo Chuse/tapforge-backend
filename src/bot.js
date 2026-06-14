@@ -220,12 +220,13 @@ function createBot(pool) {
     const name = escapeMarkdown(ctx.from?.first_name ?? 'Anon')
     await ctx.reply(
       `👋 Hola ${name}\\!\n\n` +
-      `Soy *Desna*, tu asistente de inteligencia de Desna Wallet\\.\n\n` +
-      `Publico un informe detallado al cierre de cada época \\(cada 6 horas\\) ` +
-      `en el canal privado de suscriptores\\.\n\n` +
+      `Soy *Lyra*, el analista de red de Desna\\.\n\n` +
+      `Monitorizo la red Klever en tiempo real y publico un informe completo al cierre de cada época \\(cada 6 horas\\) en el canal privado de suscriptores, con estadísticas de red, actividad on\\-chain, estado de validadores y mucho más\\.\n\n` +
       `*Comandos disponibles:*\n` +
-      `/suscribir — obtén acceso al canal premium\n` +
-      `/wallet \\[klv1\\.\\.\\.\\] — registrar tu dirección para alertas personalizadas\n` +
+      `/suscribir — obtén acceso al canal premium \\(\\$2 en KLV, pago único\\)\n` +
+      `/wallet — ver tus wallets registradas\n` +
+      `/wallet \\[klv1\\.\\.\\.\\] — añadir una wallet para alertas personalizadas\n` +
+      `/wallet eliminar \\[klv1\\.\\.\\.\\] — eliminar una wallet\n` +
       `/estado — ver tu suscripción y delegaciones activas\n`,
       { parse_mode: 'MarkdownV2' }
     )
@@ -244,6 +245,17 @@ function createBot(pool) {
       return ctx.reply('✅ Ya tienes suscripción activa\\. Usa /estado para ver los detalles\\.', {
         parse_mode: 'MarkdownV2',
       })
+    }
+
+    // Comprobar si tiene un registro pendiente caducado (>24h)
+    if (existing.rows.length > 0 && !existing.rows[0].active) {
+      const createdAt = new Date(existing.rows[0].created_at)
+      const hoursOld  = (Date.now() - createdAt.getTime()) / 3_600_000
+      if (hoursOld > 24) {
+        // Borrar el registro caducado y generar uno nuevo
+        await pool.query('DELETE FROM bot_subscribers WHERE telegram_id = $1', [telegramId])
+        existing.rows = []
+      }
     }
 
     const klvPrice  = await fetchKlvPrice()
@@ -267,6 +279,7 @@ function createBot(pool) {
       `⚠️ *IMPORTANTE:* Incluye este código en el campo *memo* de la transacción:\n\n` +
       `\`${escapeMarkdown(code)}\`\n\n` +
       `Sin el memo correcto el pago no podrá verificarse\\.\n\n` +
+      `⏳ Este código y precio son válidos durante *24 horas*\\. Pasado ese tiempo deberás iniciar el proceso de nuevo\\.\n\n` +
       `Una vez enviado, usa:\n` +
       `/pagar \\[hash de la transacción\\]`,
       { parse_mode: 'MarkdownV2' }
@@ -535,6 +548,87 @@ function createBot(pool) {
     }
   })
 
+  // /admin — solo admin
+  bot.command('admin', async (ctx) => {
+    if (ctx.from.id !== ADMIN_TELEGRAM_ID) return
+
+    try {
+      // Stats de suscriptores
+      const subStats = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE active = TRUE)  as activos,
+          COUNT(*) FILTER (WHERE active = FALSE) as pendientes,
+          COUNT(*)                                as total
+        FROM bot_subscribers
+      `)
+
+      // Ingresos
+      const ingresos = await pool.query(`
+        SELECT
+          COALESCE(SUM(klv_paid), 0)         as total_klv,
+          COALESCE(AVG(klv_paid), 0)         as avg_klv,
+          COALESCE(AVG(klv_price_at_payment), 0) as avg_price
+        FROM bot_subscribers
+        WHERE active = TRUE
+      `)
+
+      // Wallets registradas
+      const wallets = await pool.query(`
+        SELECT COUNT(*) as total FROM bot_wallets
+      `)
+
+      const walletsConWallet = await pool.query(`
+        SELECT COUNT(DISTINCT telegram_id) as total FROM bot_wallets
+      `)
+
+      // Último snapshot
+      const snap = await pool.query(`
+        SELECT epoch_number, created_at, tx_count, dau, klv_price_usdt
+        FROM bot_epoch_snapshots
+        ORDER BY epoch_number DESC LIMIT 1
+      `)
+
+      const s  = subStats.rows[0]
+      const ig = ingresos.rows[0]
+      const w  = wallets.rows[0]
+      const wc = walletsConWallet.rows[0]
+      const sn = snap.rows[0]
+
+      // Calcular próximo informe
+      const now        = new Date()
+      const hours      = now.getUTCHours()
+      const cronHours  = [3, 9, 15, 21]
+      const nextHour   = cronHours.find(h => h > hours) ?? (cronHours[0] + 24)
+      const hoursLeft  = nextHour > hours ? nextHour - hours : (nextHour + 24) - hours
+      const minsLeft   = 60 - now.getUTCMinutes()
+      const nextTime   = `~${hoursLeft}h ${minsLeft}m`
+
+      const lastEpoch  = sn ? `época ${sn.epoch_number} (${new Date(sn.created_at).toUTCString().replace(' GMT', ' UTC')})` : 'Sin datos'
+
+      await ctx.replyWithHTML(
+        `📊 <b>PANEL ADMIN — Desna Bot</b>\n\n` +
+        `👥 <b>Suscriptores</b>\n` +
+        `  Activos:    <b>${s.activos}</b>\n` +
+        `  Pendientes: ${s.pendientes}\n` +
+        `  Total:      ${s.total}\n` +
+        `  Con wallet: ${wc.total} / ${s.activos}\n` +
+        `  Wallets registradas: ${w.total}\n\n` +
+        `💰 <b>Ingresos</b>\n` +
+        `  Total KLV recibidos: <b>${parseFloat(ig.total_klv).toFixed(2)} KLV</b>\n` +
+        `  Media por pago:      ${parseFloat(ig.avg_klv).toFixed(2)} KLV\n` +
+        `  Precio medio KLV:    $${parseFloat(ig.avg_price).toFixed(6)}\n\n` +
+        `🤖 <b>Bot</b>\n` +
+        `  Último informe: ${escapeHtml(lastEpoch)}\n` +
+        `  Próximo informe: ${nextTime}\n` +
+        (sn ? `  Txs última época: ${sn.tx_count} | DAU: ${sn.dau}\n` : '') +
+        (sn ? `  KLV precio:       $${parseFloat(sn.klv_price_usdt).toFixed(6)}\n` : '')
+      )
+    } catch (err) {
+      console.error('[admin] Error:', err.message)
+      await ctx.replyWithHTML(`❌ Error: ${escapeHtml(err.message)}`)
+    }
+  })
+
   // /test — solo admin
   bot.command('test', async (ctx) => {
     if (ctx.from.id !== ADMIN_TELEGRAM_ID) return
@@ -619,6 +713,24 @@ function startEpochCron(pool, bot) {
   }, { timezone: 'UTC' })
 
   console.log('[cron] Cron de época registrado — 0 3,9,15,21 * * * UTC')
+
+  // Limpieza diaria de suscripciones pendientes caducadas (>24h sin pagar)
+  cron.schedule('0 0 * * *', async () => {
+    console.log('[cron] Limpiando suscripciones pendientes caducadas...')
+    try {
+      const res = await pool.query(
+        `DELETE FROM bot_subscribers
+         WHERE active = FALSE
+         AND created_at < NOW() - INTERVAL '24 hours'
+         RETURNING telegram_id`
+      )
+      console.log(`[cron] ${res.rowCount} suscripciones pendientes eliminadas`)
+    } catch (err) {
+      console.error('[cron] Error en limpieza:', err.message)
+    }
+  }, { timezone: 'UTC' })
+
+  console.log('[cron] Cron de limpieza registrado — 0 0 * * * UTC')
 }
 
 module.exports = { createBot, startEpochCron }
