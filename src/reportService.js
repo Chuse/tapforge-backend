@@ -1,6 +1,7 @@
 /**
  * reportService.js
  * Genera el texto del informe de época para el canal privado de Telegram
+ * Usa parse_mode: 'HTML' — mucho más robusto que MarkdownV2
  */
 
 // ─── Helpers de formato ───────────────────────────────────────────────────────
@@ -30,14 +31,21 @@ function diffPct(current, previous) {
   return ` ${sign} ${Math.abs(pct).toFixed(2)}%`
 }
 
-function escapeMarkdown(text) {
-  return String(text).replace(/[_*[\]()~`>#+=|{}.!\-]/g, '\\$&')
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
 }
+
+function b(text)  { return `<b>${escapeHtml(text)}</b>` }
+function i(text)  { return `<i>${escapeHtml(text)}</i>` }
+function code(text) { return `<code>${escapeHtml(text)}</code>` }
 
 // ─── Election changes ─────────────────────────────────────────────────────────
 
 function buildElectionChanges(current, previous) {
-  if (!previous) return '_Sin datos de época anterior para comparar_\n'
+  if (!previous) return `<i>Sin datos de época anterior para comparar</i>\n`
 
   const prevElected = new Set(
     previous.validatorList.filter(v => v.elected).map(v => v.address)
@@ -50,21 +58,21 @@ function buildElectionChanges(current, previous) {
   const exited  = previous.validatorList.filter(v => v.elected && !currElected.has(v.address))
 
   if (entered.length === 0 && exited.length === 0) {
-    return '_Sin cambios en la elección_\n'
+    return `<i>Sin cambios en la elección</i>\n`
   }
 
   let text = ''
   if (entered.length > 0) {
-    text += `✅ *Nuevos elegidos:*\n`
+    text += `✅ <b>Nuevos elegidos:</b>\n`
     for (const v of entered) {
-      const name = escapeMarkdown(v.name || `${v.address.slice(0, 8)}...`)
+      const name = escapeHtml(v.name || `${v.address.slice(0, 8)}...`)
       text += `  • ${name}\n`
     }
   }
   if (exited.length > 0) {
-    text += `❌ *Salieron:*\n`
+    text += `❌ <b>Salieron:</b>\n`
     for (const v of exited) {
-      const name = escapeMarkdown(v.name || `${v.address.slice(0, 8)}...`)
+      const name = escapeHtml(v.name || `${v.address.slice(0, 8)}...`)
       text += `  • ${name}\n`
     }
   }
@@ -79,65 +87,69 @@ function buildEpochReport(current, previous) {
   const lines   = []
 
   // Cabecera
-  lines.push(`🔷 *INFORME ÉPOCA ${current.epochNumber}*`)
-  lines.push(`📅 ${escapeMarkdown(dateStr)}`)
+  lines.push(`🔷 <b>INFORME ÉPOCA ${current.epochNumber}</b>`)
+  lines.push(`📅 ${escapeHtml(dateStr)}`)
   lines.push('')
 
   // Precio KLV
-  lines.push('💰 *PRECIO KLV*')
+  lines.push('💰 <b>PRECIO KLV</b>')
   const priceStr  = `$${current.klvPriceUsdt.toFixed(6)}`
   const priceDiff = diffPct(current.klvPriceUsdt, previous?.klvPriceUsdt)
   const change24  = current.klvPriceChange24h >= 0
     ? `▲ ${current.klvPriceChange24h.toFixed(2)}%`
     : `▼ ${Math.abs(current.klvPriceChange24h).toFixed(2)}%`
-  lines.push(`  ${escapeMarkdown(priceStr)}${escapeMarkdown(priceDiff)} \\| 24h: ${escapeMarkdown(change24)}`)
+  lines.push(`  ${escapeHtml(priceStr)}${escapeHtml(priceDiff)} | 24h: ${escapeHtml(change24)}`)
   lines.push('')
 
   // Stats de red
-  lines.push('📊 *STATS DE RED*')
+  lines.push('📊 <b>STATS DE RED</b>')
   const stakingDiff = diffKlv(current.stakingTotal, previous?.stakingTotal)
-  lines.push(`  Staking total:  ${escapeMarkdown(fmtKlv(current.stakingTotal))}${escapeMarkdown(stakingDiff)}`)
+  lines.push(`  Staking total:  ${escapeHtml(fmtKlv(current.stakingTotal))}${escapeHtml(stakingDiff)}`)
 
   if (current.circulatingSupply > 0) {
     const pctStaked = (current.stakingTotal / current.circulatingSupply) * 100
-    lines.push(`  % del supply:   ${escapeMarkdown(pctStaked.toFixed(2))}%`)
+    lines.push(`  % del supply:   ${escapeHtml(pctStaked.toFixed(2))}%`)
   }
 
   const burnedDiff = diffKlv(current.burned, previous?.burned)
-  lines.push(`  KLV quemados:   ${escapeMarkdown(fmtKlv(current.burned))}${escapeMarkdown(burnedDiff)}`)
-  lines.push(`  Circulación:    ${escapeMarkdown(fmtKlv(current.circulatingSupply))}`)
+  lines.push(`  KLV quemados:   ${escapeHtml(fmtKlv(current.burned))}${escapeHtml(burnedDiff)}`)
+  lines.push(`  Circulación:    ${escapeHtml(fmtKlv(current.circulatingSupply))}`)
   lines.push('')
 
   // Actividad on-chain
-  lines.push('⚡ *ACTIVIDAD ON\\-CHAIN*')
-  const txDiff  = previous ? ` \\(${current.txCount  >= previous.txCount  ? '+' : ''}${current.txCount  - (previous?.txCount  ?? 0)}\\)` : ''
-  const dauDiff = previous ? ` \\(${current.dau      >= previous.dau      ? '+' : ''}${current.dau      - (previous?.dau      ?? 0)}\\)` : ''
-  lines.push(`  Transacciones:   ${escapeMarkdown(fmt(current.txCount, 0))}${txDiff}`)
-  lines.push(`  Wallets activas: ${escapeMarkdown(fmt(current.dau,     0))}${dauDiff}`)
+  lines.push('⚡ <b>ACTIVIDAD ON-CHAIN</b>')
+  const txDiff  = previous
+    ? ` (${current.txCount >= previous.txCount ? '+' : ''}${current.txCount - (previous?.txCount ?? 0)})`
+    : ''
+  const dauDiff = previous
+    ? ` (${current.dau >= previous.dau ? '+' : ''}${current.dau - (previous?.dau ?? 0)})`
+    : ''
+  lines.push(`  Transacciones:   ${escapeHtml(fmt(current.txCount, 0))}${escapeHtml(txDiff)}`)
+  lines.push(`  Wallets activas: ${escapeHtml(fmt(current.dau, 0))}${escapeHtml(dauDiff)}`)
   lines.push('')
 
   // Top tipos de tx
   if (current.topContracts.length > 0) {
-    lines.push('🔀 *TOP TIPOS DE TX*')
+    lines.push('🔀 <b>TOP TIPOS DE TX</b>')
     for (let i = 0; i < Math.min(5, current.topContracts.length); i++) {
       const { type, count } = current.topContracts[i]
-      lines.push(`  ${i + 1}\\. ${escapeMarkdown(type)}: ${escapeMarkdown(fmt(count, 0))}`)
+      lines.push(`  ${i + 1}. ${escapeHtml(type)}: ${escapeHtml(fmt(count, 0))}`)
     }
     lines.push('')
   }
 
   // Top KDAs
   if (current.topKdas.length > 0) {
-    lines.push('🏆 *TOP 3 KDA POR ACTIVIDAD*')
+    lines.push('🏆 <b>TOP 3 KDA POR ACTIVIDAD</b>')
     for (let i = 0; i < Math.min(3, current.topKdas.length); i++) {
       const { asset, count } = current.topKdas[i]
-      lines.push(`  ${i + 1}\\. ${escapeMarkdown(asset)}: ${escapeMarkdown(fmt(count, 0))} txs`)
+      lines.push(`  ${i + 1}. ${escapeHtml(asset)}: ${escapeHtml(fmt(count, 0))} txs`)
     }
     lines.push('')
   }
 
   // Validadores
-  lines.push('🛡️ *ESTADO DE VALIDADORES*')
+  lines.push('🛡️ <b>ESTADO DE VALIDADORES</b>')
   lines.push(`  Total:     ${current.validatorsTotal}`)
   lines.push(`  Elegidos:  ${current.validatorsElected}`)
   lines.push(`  En jail:   ${current.validatorsJailed}`)
@@ -146,12 +158,12 @@ function buildEpochReport(current, previous) {
   lines.push('')
 
   // Election changes
-  lines.push('🗳️ *CAMBIOS EN ELECCIÓN*')
+  lines.push('🗳️ <b>CAMBIOS EN ELECCIÓN</b>')
   lines.push(buildElectionChanges(current, previous))
 
   // Pie
   lines.push('─────────────────────')
-  lines.push('_Desna · Klever Network Intelligence_')
+  lines.push('<i>Desna · Klever Network Intelligence</i>')
 
   return lines.join('\n')
 }
@@ -160,12 +172,12 @@ function buildEpochReport(current, previous) {
 
 function buildPublicSummary(current) {
   const lines = []
-  lines.push(`🔷 *Época ${current.epochNumber} cerrada*`)
+  lines.push(`🔷 <b>Época ${current.epochNumber} cerrada</b>`)
   lines.push(`💰 KLV: $${current.klvPriceUsdt.toFixed(6)}`)
-  lines.push(`⚡ ${fmt(current.txCount, 0)} txs \\| ${fmt(current.dau, 0)} wallets activas`)
+  lines.push(`⚡ ${fmt(current.txCount, 0)} txs | ${fmt(current.dau, 0)} wallets activas`)
   lines.push(`🛡️ ${current.validatorsElected} validadores elegidos`)
   lines.push('')
-  lines.push('_Informe completo disponible en el canal premium_ 👆')
+  lines.push('<i>Informe completo disponible en el canal premium 👆</i>')
   return lines.join('\n')
 }
 

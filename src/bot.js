@@ -406,7 +406,7 @@ function createBot(pool) {
       const report = buildEpochReport(snapshot, previous)
 
       await bot.telegram.sendMessage(PRIVATE_CHANNEL_ID, report, {
-        parse_mode: 'MarkdownV2',
+        parse_mode: 'HTML',
       })
 
       await ctx.reply('✅ Informe publicado en el canal\\.', { parse_mode: 'MarkdownV2' })
@@ -434,7 +434,7 @@ function startEpochCron(pool, bot) {
       const report = buildEpochReport(snapshot, previous)
 
       await bot.telegram.sendMessage(PRIVATE_CHANNEL_ID, report, {
-        parse_mode: 'MarkdownV2',
+        parse_mode: 'HTML',
       })
 
       await sendValidatorAlerts(pool, bot, snapshot, previous)
