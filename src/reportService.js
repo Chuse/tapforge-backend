@@ -182,10 +182,11 @@ function buildMsg3(current, previous) {
 
   lines.push('📋 <b>ESTADO GENERAL</b>')
   lines.push(`  Total:     ${current.validatorsTotal}`)
-  lines.push(`  Elegidos:  ${current.validatorsElected}`)
+  lines.push(`  Elegidos:  ${current.validatorsElected} <i>(produciendo bloques)</i>`)
+  lines.push(`  Elegibles: ${current.validatorsEligible ?? current.validatorList?.filter(v => v.eligible).length ?? 0} <i>(activos, pueden ser elegidos)</i>`)
+  lines.push(`  En espera: ${current.validatorsWaiting}`)
   lines.push(`  En jail:   ${current.validatorsJailed}`)
   lines.push(`  Inactivos: ${current.validatorsInactive}`)
-  lines.push(`  En espera: ${current.validatorsWaiting}`)
   lines.push('')
 
   // Election changes
