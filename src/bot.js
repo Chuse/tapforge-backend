@@ -9,7 +9,7 @@ const cron         = require('node-cron')
 const crypto       = require('crypto')
 
 const { collectEpochSnapshot, saveEpochSnapshot, getPreviousSnapshot } = require('./epochService')
-const { buildEpochReport }                                              = require('./reportService')
+const { buildEpochReport, buildEpochMessages }                          = require('./reportService')
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -403,11 +403,11 @@ function createBot(pool) {
 
       await saveEpochSnapshot(pool, snapshot)
 
-      const report = buildEpochReport(snapshot, previous)
+      const messages = buildEpochMessages(snapshot, previous)
 
-      await bot.telegram.sendMessage(PRIVATE_CHANNEL_ID, report, {
-        parse_mode: 'HTML',
-      })
+      for (const msg of messages) {
+        await bot.telegram.sendMessage(PRIVATE_CHANNEL_ID, msg, { parse_mode: 'HTML' })
+      }
 
       await ctx.reply('✅ Informe publicado en el canal\\.', { parse_mode: 'MarkdownV2' })
     } catch (err) {
@@ -431,11 +431,11 @@ function startEpochCron(pool, bot) {
 
       await saveEpochSnapshot(pool, snapshot)
 
-      const report = buildEpochReport(snapshot, previous)
+      const messages = buildEpochMessages(snapshot, previous)
 
-      await bot.telegram.sendMessage(PRIVATE_CHANNEL_ID, report, {
-        parse_mode: 'HTML',
-      })
+      for (const msg of messages) {
+        await bot.telegram.sendMessage(PRIVATE_CHANNEL_ID, msg, { parse_mode: 'HTML' })
+      }
 
       await sendValidatorAlerts(pool, bot, snapshot, previous)
 

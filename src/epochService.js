@@ -39,6 +39,10 @@ const TX_TYPE_MAP = {
   63: 'SmartContract',
 }
 
+function cleanTypeName(raw) {
+  return raw.replace('ContractType', '').replace('Type', '').trim()
+}
+
 // ─── Node status ──────────────────────────────────────────────────────────────
 
 async function getNodeStatus() {
@@ -62,11 +66,10 @@ async function getNodeStatus() {
 
 function getPreviousEpochRange(status) {
   const slotDurationSec  = status.slotDuration / 1000
-  const epochDurationSec = status.slotsPerEpoch * slotDurationSec // 21600s = 6h
+  const epochDurationSec = status.slotsPerEpoch * slotDurationSec
 
   const nonceStart = status.nonceAtEpochStart - status.slotsPerEpoch
   const nonceEnd   = status.nonceAtEpochStart - 1
-
   const tsEndSec   = status.currentSlotTs - epochDurationSec
   const tsStartSec = tsEndSec - epochDurationSec
 
@@ -85,27 +88,41 @@ async function fetchValidators() {
   let page    = 1
   const limit = 100
   const all   = []
+  let networkTotalDelegated = 0
 
   while (true) {
     const res  = await fetch(`${KLEVER_API}/v1.0/validator/list?limit=${limit}&page=${page}`)
     const json = await res.json()
     const list = json?.data?.validators ?? []
 
+    // networkTotalStake viene en la primera página
+    if (page === 1) {
+      networkTotalDelegated = (json?.data?.networkTotalStake ?? 0) / 1_000_000
+    }
+
     if (list.length === 0) break
 
     for (const v of list) {
-      // El campo "list" indica el estado: "eligible", "waiting", "jailed", "new"
-      const listStatus = v.list ?? ''
+      const listStatus   = v.list ?? ''
+      const totalSuccess = v.totalValidatorSuccessRate?.numSuccess ?? 0
+      const totalFailure = v.totalValidatorSuccessRate?.numFailure ?? 0
+      const totalBlocks  = totalSuccess + totalFailure
+      const successRate  = totalBlocks > 0 ? (totalSuccess / totalBlocks) * 100 : 0
+
       all.push({
-        address:    v.ownerAddress ?? v.address ?? '',
-        name:       v.name ?? '',
-        elected:    listStatus === 'eligible',
-        jailed:     v.jailed === true || listStatus === 'jailed',
-        inactive:   listStatus !== 'eligible' && listStatus !== 'jailed' && listStatus !== 'waiting',
-        waiting:    listStatus === 'waiting',
-        stake:      v.totalStake ?? 0,
-        commission: v.commission ?? 0,
+        address:       v.ownerAddress ?? v.address ?? '',
+        name:          v.name ?? '',
+        elected:       listStatus === 'eligible',
+        jailed:        v.jailed === true || listStatus === 'jailed',
+        inactive:      listStatus !== 'eligible' && listStatus !== 'jailed' && listStatus !== 'waiting',
+        waiting:       listStatus === 'waiting',
+        stake:         (v.totalStake ?? 0) / 1_000_000,
+        commission:    v.commission ?? 0,
         listStatus,
+        successRate,
+        totalSuccess,
+        totalFailure,
+        logo:          v.logo ?? '',
       })
     }
 
@@ -113,7 +130,12 @@ async function fetchValidators() {
     page++
   }
 
-  return all
+  // Validator spotlight — elegido con mejor success rate (mínimo 1000 bloques históricos)
+  const spotlight = all
+    .filter(v => v.elected && (v.totalSuccess + v.totalFailure) > 1000)
+    .sort((a, b) => b.successRate - a.successRate)[0] ?? null
+
+  return { validators: all, networkTotalDelegated, spotlight }
 }
 
 // ─── KLV Asset stats ──────────────────────────────────────────────────────────
@@ -122,9 +144,7 @@ async function fetchKlvAsset() {
   const res  = await fetch(`${KLEVER_API}/v1.0/assets/KLV`)
   const json = await res.json()
   const a    = json?.data?.asset ?? {}
-
-  const precision = a.precision ?? 6
-  const div       = Math.pow(10, precision)
+  const div  = Math.pow(10, a.precision ?? 6)
 
   return {
     stakingTotal:      (a.staking?.totalStaked   ?? 0) / div,
@@ -141,7 +161,6 @@ async function fetchKlvPrice() {
   )
   const json = await res.json()
   const coin = json?.[0] ?? {}
-
   return {
     price:     coin.current_price               ?? 0,
     change24h: coin.price_change_percentage_24h ?? 0,
@@ -156,14 +175,22 @@ async function fetchEpochTxStats(nonceStart, nonceEnd) {
 
   const senders       = new Set()
   const contractCount = {}
-  const kdaCount      = {}
-  let   txCount       = 0
-  let   done          = false
+  const kdaTransfers  = {}
+  const kdaClaims     = {}
+  const kdaFreezes    = {}
+  const kdaAll        = {}
+  const contractAddrs = {}
+
+  let txCount      = 0
+  let totalKAppFee = 0
+  let totalBwFee   = 0
+  let volumeKlv    = 0
+  let mostActiveAddr = ''
+  const senderCount  = {}
+  let done           = false
 
   while (!done) {
-    const res  = await fetch(
-      `${KLEVER_API}/v1.0/transaction/list?limit=${limit}&page=${page}`
-    )
+    const res  = await fetch(`${KLEVER_API}/v1.0/transaction/list?limit=${limit}&page=${page}`)
     const json = await res.json()
     const txs  = json?.data?.transactions ?? []
 
@@ -171,57 +198,126 @@ async function fetchEpochTxStats(nonceStart, nonceEnd) {
 
     for (const tx of txs) {
       const blockNum = tx.blockNum ?? 0
-
       if (blockNum < nonceStart) { done = true; break }
       if (blockNum > nonceEnd)   continue
 
       txCount++
-      if (tx.sender) senders.add(tx.sender)
+      const sender = tx.sender ?? ''
+      if (sender) {
+        senders.add(sender)
+        senderCount[sender] = (senderCount[sender] ?? 0) + 1
+      }
+
+      totalKAppFee += (tx.kAppFee      ?? 0) / 1_000_000
+      totalBwFee   += (tx.bandwidthFee ?? 0) / 1_000_000
 
       const contracts = Array.isArray(tx.contract) ? tx.contract : []
       for (const c of contracts) {
-        // Usar typeString si existe, si no mapear el número
-        const type = c.typeString ?? TX_TYPE_MAP[c.type] ?? `Type${c.type}`
+        const rawType = c.typeString ?? TX_TYPE_MAP[c.type] ?? `Type${c.type}`
+        const type    = cleanTypeName(rawType)
         contractCount[type] = (contractCount[type] ?? 0) + 1
 
-        // Recopilar assets — incluye callValue para SmartContracts
-        const assets = []
-        if (c.parameter?.assetId) assets.push(c.parameter.assetId)
-        if (c.parameter?.asset)   assets.push(c.parameter.asset)
-        if (Array.isArray(c.parameter?.callValue)) {
-          for (const cv of c.parameter.callValue) {
-            if (cv.asset) assets.push(cv.asset)
-          }
-        }
-        for (const asset of assets) {
+        const param = c.parameter ?? {}
+
+        // Volumen KLV en transfers
+        if (type === 'Transfer') {
+          const asset  = param.assetId ?? param.asset ?? 'KLV'
+          const amount = (param.amount ?? 0) / 1_000_000
+          if (asset === 'KLV') volumeKlv += amount
+
           const ticker = asset.split('-')[0]
-          kdaCount[ticker] = (kdaCount[ticker] ?? 0) + 1
+          kdaTransfers[ticker] = (kdaTransfers[ticker] ?? 0) + 1
+          kdaAll[ticker]       = (kdaAll[ticker]       ?? 0) + 1
+        }
+
+        // Claims
+        if (type === 'Claim') {
+          const asset  = param.assetId ?? 'KLV'
+          const ticker = asset.split('-')[0]
+          kdaClaims[ticker] = (kdaClaims[ticker] ?? 0) + 1
+          kdaAll[ticker]    = (kdaAll[ticker]    ?? 0) + 1
+        }
+
+        // Freezes
+        if (type === 'Freeze') {
+          const asset  = param.assetId ?? 'KLV'
+          const ticker = asset.split('-')[0]
+          kdaFreezes[ticker] = (kdaFreezes[ticker] ?? 0) + 1
+          kdaAll[ticker]     = (kdaAll[ticker]     ?? 0) + 1
+        }
+
+        // SmartContract — top contratos por dirección
+        if (type === 'SmartContract') {
+          const addr = param.address ?? ''
+          if (addr) {
+            const short = `${addr.slice(0, 6)}…${addr.slice(-4)}`
+            contractAddrs[short] = (contractAddrs[short] ?? 0) + 1
+          }
+
+          // Assets en callValue
+          if (Array.isArray(param.callValue)) {
+            for (const cv of param.callValue) {
+              if (cv.asset) {
+                const ticker = cv.asset.split('-')[0]
+                kdaAll[ticker] = (kdaAll[ticker] ?? 0) + 1
+              }
+            }
+          }
         }
       }
     }
 
     const lastBlock = txs[txs.length - 1]?.blockNum ?? 0
     if (lastBlock < nonceStart) done = true
-
     page++
-
-    if (page > 200) {
-      console.warn('[epochService] Límite de paginación alcanzado')
-      break
-    }
+    if (page > 200) { console.warn('[epochService] Límite de paginación alcanzado'); break }
   }
 
+  // Most active sender
+  const mostActive = Object.entries(senderCount).sort((a, b) => b[1] - a[1])[0]
+  if (mostActive) mostActiveAddr = mostActive[0]
+  const mostActiveTxCount = mostActive?.[1] ?? 0
+
   const topContracts = Object.entries(contractCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
+    .sort((a, b) => b[1] - a[1]).slice(0, 5)
     .map(([type, count]) => ({ type, count }))
 
-  const topKdas = Object.entries(kdaCount)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
+  const topKdaAll = Object.entries(kdaAll)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
     .map(([asset, count]) => ({ asset, count }))
 
-  return { txCount, dau: senders.size, topContracts, topKdas }
+  const topKdaTransfers = Object.entries(kdaTransfers)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([asset, count]) => ({ asset, count }))
+
+  const topKdaClaims = Object.entries(kdaClaims)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([asset, count]) => ({ asset, count }))
+
+  const topKdaFreezes = Object.entries(kdaFreezes)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([asset, count]) => ({ asset, count }))
+
+  const topSmartContracts = Object.entries(contractAddrs)
+    .sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([addr, count]) => ({ addr, count }))
+
+  return {
+    txCount,
+    dau: senders.size,
+    totalKAppFee,
+    totalBwFee,
+    burnedFee: totalBwFee / 2,
+    volumeKlv,
+    mostActiveAddr,
+    mostActiveTxCount,
+    topContracts,
+    topKdas: topKdaAll,
+    topKdaTransfers,
+    topKdaClaims,
+    topKdaFreezes,
+    topSmartContracts,
+  }
 }
 
 // ─── Recopilación completa ────────────────────────────────────────────────────
@@ -234,34 +330,48 @@ async function collectEpochSnapshot() {
 
   console.log(`[epochService] Época ${range.epochNumber} | Bloques ${range.nonceStart}-${range.nonceEnd}`)
 
-  const [validators, klvAsset, price, txStats] = await Promise.all([
+  const [validatorData, klvAsset, price, txStats] = await Promise.all([
     fetchValidators(),
     fetchKlvAsset(),
     fetchKlvPrice(),
     fetchEpochTxStats(range.nonceStart, range.nonceEnd),
   ])
 
+  const { validators, networkTotalDelegated, spotlight } = validatorData
+
   return {
-    epochNumber:        range.epochNumber,
-    nonceStart:         range.nonceStart,
-    nonceEnd:           range.nonceEnd,
-    timestampStart:     range.tsStart,
-    timestampEnd:       range.tsEnd,
-    stakingTotal:       klvAsset.stakingTotal,
-    burned:             klvAsset.burned,
-    circulatingSupply:  klvAsset.circulatingSupply,
-    klvPriceUsdt:       price.price,
-    klvPriceChange24h:  price.change24h,
-    txCount:            txStats.txCount,
-    dau:                txStats.dau,
-    validatorList:      validators,
-    validatorsTotal:    validators.length,
-    validatorsElected:  validators.filter(v => v.elected).length,
-    validatorsJailed:   validators.filter(v => v.jailed).length,
-    validatorsInactive: validators.filter(v => v.inactive).length,
-    validatorsWaiting:  validators.filter(v => v.waiting).length,
-    topContracts:       txStats.topContracts,
-    topKdas:            txStats.topKdas,
+    epochNumber:          range.epochNumber,
+    nonceStart:           range.nonceStart,
+    nonceEnd:             range.nonceEnd,
+    timestampStart:       range.tsStart,
+    timestampEnd:         range.tsEnd,
+    stakingTotal:         klvAsset.stakingTotal,
+    burned:               klvAsset.burned,
+    circulatingSupply:    klvAsset.circulatingSupply,
+    networkTotalDelegated,
+    klvPriceUsdt:         price.price,
+    klvPriceChange24h:    price.change24h,
+    txCount:              txStats.txCount,
+    dau:                  txStats.dau,
+    totalKAppFee:         txStats.totalKAppFee,
+    totalBwFee:           txStats.totalBwFee,
+    burnedFee:            txStats.burnedFee,
+    volumeKlv:            txStats.volumeKlv,
+    mostActiveAddr:       txStats.mostActiveAddr,
+    mostActiveTxCount:    txStats.mostActiveTxCount,
+    validatorList:        validators,
+    validatorsTotal:      validators.length,
+    validatorsElected:    validators.filter(v => v.elected).length,
+    validatorsJailed:     validators.filter(v => v.jailed).length,
+    validatorsInactive:   validators.filter(v => v.inactive).length,
+    validatorsWaiting:    validators.filter(v => v.waiting).length,
+    spotlight,
+    topContracts:         txStats.topContracts,
+    topKdas:              txStats.topKdas,
+    topKdaTransfers:      txStats.topKdaTransfers,
+    topKdaClaims:         txStats.topKdaClaims,
+    topKdaFreezes:        txStats.topKdaFreezes,
+    topSmartContracts:    txStats.topSmartContracts,
   }
 }
 
@@ -295,26 +405,15 @@ async function saveEpochSnapshot(pool, snapshot) {
       top_contracts        = EXCLUDED.top_contracts,
       top_kdas             = EXCLUDED.top_kdas`,
     [
-      snapshot.epochNumber,
-      snapshot.nonceStart,
-      snapshot.nonceEnd,
-      snapshot.timestampStart,
-      snapshot.timestampEnd,
-      snapshot.stakingTotal,
-      snapshot.burned,
-      snapshot.circulatingSupply,
-      snapshot.klvPriceUsdt,
-      snapshot.klvPriceChange24h,
-      snapshot.txCount,
-      snapshot.dau,
+      snapshot.epochNumber, snapshot.nonceStart, snapshot.nonceEnd,
+      snapshot.timestampStart, snapshot.timestampEnd,
+      snapshot.stakingTotal, snapshot.burned, snapshot.circulatingSupply,
+      snapshot.klvPriceUsdt, snapshot.klvPriceChange24h,
+      snapshot.txCount, snapshot.dau,
       JSON.stringify(snapshot.validatorList),
-      snapshot.validatorsTotal,
-      snapshot.validatorsElected,
-      snapshot.validatorsJailed,
-      snapshot.validatorsInactive,
-      snapshot.validatorsWaiting,
-      JSON.stringify(snapshot.topContracts),
-      JSON.stringify(snapshot.topKdas),
+      snapshot.validatorsTotal, snapshot.validatorsElected,
+      snapshot.validatorsJailed, snapshot.validatorsInactive, snapshot.validatorsWaiting,
+      JSON.stringify(snapshot.topContracts), JSON.stringify(snapshot.topKdas),
     ]
   )
 }
@@ -326,31 +425,22 @@ async function getPreviousSnapshot(pool, epochNumber) {
     'SELECT * FROM bot_epoch_snapshots WHERE epoch_number = $1',
     [epochNumber - 1]
   )
-
   if (res.rows.length === 0) return null
   const r = res.rows[0]
-
   return {
-    epochNumber:        r.epoch_number,
-    nonceStart:         r.nonce_start,
-    nonceEnd:           r.nonce_end,
-    timestampStart:     r.timestamp_start,
-    timestampEnd:       r.timestamp_end,
-    stakingTotal:       parseFloat(r.staking_total),
-    burned:             parseFloat(r.burned),
-    circulatingSupply:  parseFloat(r.circulating_supply),
-    klvPriceUsdt:       parseFloat(r.klv_price_usdt),
-    klvPriceChange24h:  parseFloat(r.klv_price_change_24h),
-    txCount:            r.tx_count,
-    dau:                r.dau,
-    validatorList:      r.validator_list      ?? [],
-    validatorsTotal:    r.validators_total,
-    validatorsElected:  r.validators_elected,
-    validatorsJailed:   r.validators_jailed,
-    validatorsInactive: r.validators_inactive,
-    validatorsWaiting:  r.validators_waiting,
-    topContracts:       r.top_contracts ?? [],
-    topKdas:            r.top_kdas      ?? [],
+    epochNumber:      r.epoch_number,
+    stakingTotal:     parseFloat(r.staking_total),
+    burned:           parseFloat(r.burned),
+    circulatingSupply: parseFloat(r.circulating_supply),
+    klvPriceUsdt:     parseFloat(r.klv_price_usdt),
+    klvPriceChange24h: parseFloat(r.klv_price_change_24h),
+    txCount:          r.tx_count,
+    dau:              r.dau,
+    validatorList:    r.validator_list   ?? [],
+    validatorsElected: r.validators_elected,
+    validatorsJailed:  r.validators_jailed,
+    topContracts:     r.top_contracts ?? [],
+    topKdas:          r.top_kdas      ?? [],
   }
 }
 
