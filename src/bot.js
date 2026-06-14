@@ -157,6 +157,47 @@ async function sendValidatorAlerts(pool, bot, current, previous) {
   }
 }
 
+// ─── Helper: resumen de wallet ────────────────────────────────────────────────
+
+function fmt(n, decimals = 2) {
+  return Number(n).toLocaleString('en-US', { maximumFractionDigits: decimals })
+}
+
+function buildWalletSummary(address, summary, title) {
+  const lines = []
+  lines.push(`${title}\n`)
+  lines.push(`<code>${escapeHtml(address)}</code>\n`)
+
+  // KLV
+  lines.push(`<b>KLV frozen:</b> ${escapeHtml(fmt(summary.frozenKlv))} KLV`)
+  if (summary.lastClaimKlv > 0) {
+    lines.push(`<b>Último StakingClaim:</b> época ${summary.lastClaimKlv}`)
+  }
+
+  // Delegaciones agrupadas
+  if (summary.delegations.length > 0) {
+    lines.push(`\n<b>Delegaciones activas:</b>`)
+    for (let i = 0; i < summary.delegations.length; i++) {
+      const d    = summary.delegations[i]
+      const name = escapeHtml(d.validatorName || `${d.validatorAddr.slice(0, 10)}...`)
+      lines.push(`  ${i + 1}. <b>${name}</b> — ${escapeHtml(fmt(d.balance))} KLV`)
+    }
+  } else {
+    lines.push(`\n<i>Sin delegaciones activas</i>`)
+  }
+
+  // KFI
+  if (summary.frozenKfi > 0) {
+    lines.push(`\n<b>KFI frozen:</b> ${escapeHtml(fmt(summary.frozenKfi))} KFI`)
+    if (summary.lastClaimKfi > 0) {
+      lines.push(`<b>Último claim KFI:</b> época ${summary.lastClaimKfi}`)
+    }
+  }
+
+  lines.push(`\n<i>Alertas activas: recompensas próximas a caducar y cambios de comisión</i>`)
+  return lines.join('\n')
+}
+
 // ─── Crear bot ────────────────────────────────────────────────────────────────
 
 function createBot(pool) {
@@ -333,25 +374,38 @@ function createBot(pool) {
     const klvPaid = parseFloat(sub.klv_paid).toFixed(2)
     const usdPaid = parseFloat(sub.usd_value_paid).toFixed(2)
 
-    const alertsRes = await pool.query(
-      'SELECT validator_address FROM bot_validator_alerts WHERE telegram_id = $1',
+    await ctx.replyWithHTML(
+      `✅ <b>Suscripción activa</b>\n\n` +
+      `Pagado: <b>${escapeHtml(klvPaid)} KLV</b> ($${escapeHtml(usdPaid)})\n` +
+      `Fecha: ${escapeHtml(paidAt)}`
+    )
+
+    // Mostrar resumen de cada wallet
+    const wallets = await pool.query(
+      'SELECT klever_address FROM bot_wallets WHERE telegram_id = $1 ORDER BY created_at ASC',
       [telegramId]
     )
 
-    let alertsText = '_Ninguno registrado_'
-    if (alertsRes.rows.length > 0) {
-      alertsText = alertsRes.rows
-        .map(r => `  • \`${escapeMarkdown(r.validator_address.slice(0, 12))}\\.\\.\\.\``)
-        .join('\n')
+    if (wallets.rows.length === 0) {
+      return ctx.replyWithHTML(
+        `📭 <b>Sin wallets registradas</b>\n\n` +
+        `Usa <code>/wallet klv1...</code> para añadir tu dirección KLV y recibir alertas personalizadas.`
+      )
     }
 
-    await ctx.reply(
-      `✅ *Suscripción activa*\n\n` +
-      `Pagado: ${escapeMarkdown(klvPaid)} KLV \\(\\$${escapeMarkdown(usdPaid)}\\)\n` +
-      `Fecha: ${escapeMarkdown(paidAt)}\n\n` +
-      `*Validadores monitorizados:*\n${alertsText}`,
-      { parse_mode: 'MarkdownV2' }
-    )
+    for (let i = 0; i < wallets.rows.length; i++) {
+      const addr = wallets.rows[i].klever_address
+      try {
+        const summary = await getDelegationsSummary(addr)
+        if (!summary) {
+          await ctx.replyWithHTML(`👛 <b>Wallet ${i + 1}</b>\n<code>${escapeHtml(addr)}</code>\n\n<i>No se pudo obtener información.</i>`)
+          continue
+        }
+        await ctx.replyWithHTML(buildWalletSummary(addr, summary, `👛 <b>Wallet ${i + 1}</b>`))
+      } catch (err) {
+        console.error(`[bot] Error obteniendo wallet ${addr}:`, err.message)
+      }
+    }
   })
 
   // /wallet — gestión de wallets (máx 3)
@@ -450,30 +504,7 @@ function createBot(pool) {
         [telegramId, newAddress]
       )
 
-      // Resumen de delegaciones
-      let delegText = '<i>Sin delegaciones activas</i>'
-      if (summary.delegations.length > 0) {
-        delegText = summary.delegations
-          .map((d, i) =>
-            `  ${i + 1}. <b>${escapeHtml(d.validatorName || d.validatorAddr.slice(0, 10) + '...')}</b> — ${d.balance.toFixed(2)} KLV`
-          )
-          .join('\n')
-      }
-
-      const epochsInfo = summary.lastClaimEpoch > 0
-        ? `Último claim: época <b>${summary.lastClaimEpoch}</b>`
-        : `Sin claims registrados`
-
-      await ctx.replyWithHTML(
-        `✅ <b>Wallet registrada</b>\n\n` +
-        `<code>${escapeHtml(newAddress)}</code>\n\n` +
-        `<b>KLV frozen:</b> ${summary.frozenBalance.toFixed(2)} KLV\n` +
-        `${epochsInfo}\n\n` +
-        `<b>Delegaciones activas:</b>\n${delegText}\n\n` +
-        `Recibirás alertas si:\n` +
-        `• Tus recompensas KLV están próximas a caducar\n` +
-        `• Un validador donde tienes KLV delegados cambia su comisión`
-      )
+      await ctx.replyWithHTML(buildWalletSummary(newAddress, summary, '✅ <b>Wallet registrada</b>'))
     } catch (err) {
       console.error('[bot] Error en /wallet:', err.message)
       await ctx.replyWithHTML('❌ Error al verificar la dirección. Inténtalo más tarde.')

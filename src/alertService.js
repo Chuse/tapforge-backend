@@ -227,7 +227,22 @@ async function checkCommissionAlerts(bot, telegramId, kleverAddress, previousSna
   }
 }
 
-// ─── Ejecutar todas las alertas ───────────────────────────────────────────────
+// ─── Ejecutar todas las alertas en lotes ─────────────────────────────────────
+
+const BATCH_SIZE     = 10
+const BATCH_DELAY_MS = 1000
+
+async function processUserAlerts(bot, telegramId, kleverAddress, currentEpoch, previousSnapshot) {
+  const account = await fetchAccountData(kleverAddress)
+  if (!account) return
+
+  await Promise.all([
+    checkKlvStakingAlert(bot, telegramId, kleverAddress, currentEpoch, account),
+    checkKlvAllowanceAlert(bot, telegramId, kleverAddress, currentEpoch),
+    checkKfiAlert(bot, telegramId, kleverAddress, currentEpoch, account),
+    checkCommissionAlerts(bot, telegramId, kleverAddress, previousSnapshot, account),
+  ])
+}
 
 async function runPersonalAlerts(pool, bot, currentEpoch, previousSnapshot) {
   const res = await pool.query(`
@@ -235,43 +250,60 @@ async function runPersonalAlerts(pool, bot, currentEpoch, previousSnapshot) {
     FROM bot_subscribers bs
     JOIN bot_wallets bw ON bs.telegram_id = bw.telegram_id
     WHERE bs.active = TRUE
+    ORDER BY bs.telegram_id, bw.created_at
   `)
 
-  console.log(`[alertService] Ejecutando alertas para ${res.rows.length} wallet(s)...`)
+  const rows = res.rows
+  console.log(`[alertService] Ejecutando alertas para ${rows.length} wallet(s) en lotes de ${BATCH_SIZE}...`)
 
-  for (const row of res.rows) {
-    const { telegram_id, klever_address } = row
+  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
+    const batch = rows.slice(i, i + BATCH_SIZE)
 
-    try {
-      const account = await fetchAccountData(klever_address)
-      if (!account) continue
+    await Promise.all(
+      batch.map(({ telegram_id, klever_address }) =>
+        processUserAlerts(bot, telegram_id, klever_address, currentEpoch, previousSnapshot)
+          .catch(err => console.error(`[alertService] Error ${klever_address}:`, err.message))
+      )
+    )
 
-      await Promise.all([
-        checkKlvStakingAlert(bot, telegram_id, klever_address, currentEpoch, account),
-        checkKlvAllowanceAlert(bot, telegram_id, klever_address, currentEpoch),
-        checkKfiAlert(bot, telegram_id, klever_address, currentEpoch, account),
-        checkCommissionAlerts(bot, telegram_id, klever_address, previousSnapshot, account),
-      ])
-    } catch (err) {
-      console.error(`[alertService] Error procesando ${klever_address}:`, err.message)
+    // Pausa entre lotes para no saturar la API
+    if (i + BATCH_SIZE < rows.length) {
+      await new Promise(r => setTimeout(r, BATCH_DELAY_MS))
     }
+
+    console.log(`[alertService] Lote ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(rows.length / BATCH_SIZE)} completado`)
   }
 
   console.log('[alertService] Alertas personalizadas completadas')
 }
 
-// ─── Resumen de delegaciones para /wallet ────────────────────────────────────
+// ─── Resumen de delegaciones para /wallet y /estado ──────────────────────────
+
+function groupDelegations(delegations) {
+  const grouped = {}
+  for (const d of delegations) {
+    const key = d.validatorAddr
+    if (!grouped[key]) {
+      grouped[key] = { ...d, balance: 0 }
+    }
+    grouped[key].balance += d.balance
+  }
+  return Object.values(grouped).sort((a, b) => b.balance - a.balance)
+}
 
 async function getDelegationsSummary(kleverAddress) {
   const account = await fetchAccountData(kleverAddress)
   if (!account) return null
 
-  const klvAsset       = account.assets?.KLV
-  const frozenBalance  = (klvAsset?.frozenBalance ?? 0) / 1_000_000
-  const lastClaimEpoch = klvAsset?.lastClaim?.epoch ?? 0
-  const delegations    = getActiveDelegations(account)
+  const klvAsset        = account.assets?.KLV
+  const kfiAsset        = account.assets?.KFI
+  const frozenKlv       = (klvAsset?.frozenBalance ?? 0) / 1_000_000
+  const frozenKfi       = (kfiAsset?.frozenBalance ?? 0) / 1_000_000
+  const lastClaimKlv    = klvAsset?.lastClaim?.epoch ?? 0
+  const lastClaimKfi    = kfiAsset?.lastClaim?.epoch ?? 0
+  const delegations     = groupDelegations(getActiveDelegations(account))
 
-  return { delegations, frozenBalance, lastClaimEpoch }
+  return { delegations, frozenKlv, frozenKfi, lastClaimKlv, lastClaimKfi }
 }
 
 module.exports = { runPersonalAlerts, getDelegationsSummary }
