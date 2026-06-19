@@ -6,6 +6,7 @@ const { initDB, pool }  = require('./db')
 const changellyRouter   = require('./routes/changelly')
 const swapRouter        = require('./routes/swap')
 const assetsRouter      = require('./routes/assets')
+const adminAuthRouter   = require('./routes/adminAuth')
 const pointsRouter      = require('./routes/points')
 const { createBot, startEpochCron } = require('./bot')
 
@@ -40,6 +41,9 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'TapForge Backend' })
 })
 
+// ─── Admin auth ────────────────────────────────────────────────────────────
+app.use('/admin/auth', adminAuthRouter)
+
 // ─── Assets ────────────────────────────────────────────────────────────────
 app.use('/assets/sync',       adminLimiter)
 app.use('/assets/chains/:id', adminLimiter)
@@ -66,7 +70,6 @@ initDB()
       console.log(`TapForge Backend corriendo en puerto ${PORT}`)
     })
 
-    // Iniciar bot de Telegram
     const bot = createBot(pool)
     startEpochCron(pool, bot)
 
