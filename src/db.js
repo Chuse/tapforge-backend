@@ -1,9 +1,10 @@
 /**
  * db.js
- * PostgreSQL Railway + tablas base Desna/TapForge
+ * PostgreSQL Railway + tablas base Desna/TapForge + infraestructura admin
  */
 
 const { Pool } = require('pg')
+const bcrypt = require('bcryptjs')
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -43,11 +44,53 @@ async function initDB() {
         synced_at TIMESTAMP DEFAULT NOW(),
         PRIMARY KEY (id, chain_id)
       );
+
+      CREATE TABLE IF NOT EXISTS admin_users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        name TEXT,
+        role TEXT NOT NULL DEFAULT 'admin',
+        enabled BOOLEAN DEFAULT true,
+        last_login_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS admin_sessions (
+        id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+        token_hash TEXT NOT NULL,
+        ip TEXT,
+        user_agent TEXT,
+        expires_at TIMESTAMP NOT NULL,
+        revoked_at TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS admin_audit_log (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES admin_users(id) ON DELETE SET NULL,
+        action TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id TEXT,
+        before_json JSONB,
+        after_json JSONB,
+        ip TEXT,
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      );
     `)
 
     await client.query(`
       ALTER TABLE chains ADD COLUMN IF NOT EXISTS display_name TEXT;
       ALTER TABLE chains ADD COLUMN IF NOT EXISTS logo TEXT;
+
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS name TEXT;
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin';
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT true;
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
+      ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
     `)
 
     await client.query(`
@@ -79,10 +122,49 @@ async function initDB() {
       ON CONFLICT (id, chain_id) DO NOTHING;
     `)
 
+    await createInitialAdmin(client)
+
     console.log('[db] Base de datos inicializada correctamente')
   } finally {
     client.release()
   }
+}
+
+async function createInitialAdmin(client) {
+  const email = process.env.ADMIN_EMAIL
+  const password = process.env.ADMIN_PASSWORD
+
+  if (!email || !password) {
+    console.log('[db] ADMIN_EMAIL / ADMIN_PASSWORD no definidos. No se crea admin inicial.')
+    return
+  }
+
+  const existing = await client.query(
+    'SELECT id FROM admin_users WHERE email = $1',
+    [email.toLowerCase()]
+  )
+
+  if (existing.rows.length > 0) {
+    return
+  }
+
+  const passwordHash = await bcrypt.hash(password, 12)
+
+  await client.query(
+    `
+    INSERT INTO admin_users
+      (email, password_hash, name, role, enabled)
+    VALUES
+      ($1, $2, $3, 'owner', true)
+    `,
+    [
+      email.toLowerCase(),
+      passwordHash,
+      'Administrador',
+    ]
+  )
+
+  console.log('[db] Admin inicial creado:', email)
 }
 
 module.exports = {
