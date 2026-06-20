@@ -279,3 +279,61 @@ input {
   padding: 24px;
   text-align: center;
 }
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.42);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 50;
+}
+
+.modal {
+  width: 100%;
+  max-width: 720px;
+  background: var(--surface);
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  padding: 22px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.22);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 18px;
+}
+
+.modal-header h2 {
+  margin: 0;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.field.full {
+  grid-column: 1 / -1;
+}
+
+.checkbox-row label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.checkbox-row input {
+  width: auto;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
