@@ -8,6 +8,7 @@ const swapRouter        = require('./routes/swap')
 const assetsRouter      = require('./routes/assets')
 const adminAuthRouter   = require('./routes/adminAuth')
 const pointsRouter      = require('./routes/points')
+const adminChainsRouter = require('./routes/adminChains')
 const { createBot, startEpochCron } = require('./bot')
 
 const app  = express()
@@ -43,6 +44,7 @@ app.get('/health', (req, res) => {
 
 // ─── Admin auth ────────────────────────────────────────────────────────────
 app.use('/admin/auth', adminAuthRouter)
+app.use('/admin/chains', adminChainsRouter)
 
 // ─── Assets ────────────────────────────────────────────────────────────────
 app.use('/assets/sync',       adminLimiter)
