@@ -19,7 +19,29 @@ const { createBot, startEpochCron } = require('./bot')
 const app  = express()
 const PORT = process.env.PORT ?? 8080
 
-app.use(cors())
+// CORS
+// Los endpoints de la app móvil no son peticiones de navegador, así que el
+// origin no les afecta. Restringir aquí cierra el panel admin web (que vive en
+// este mismo backend) a orígenes conocidos. Configurable por env en Railway:
+//   ADMIN_ORIGIN = https://tu-panel-admin
+// Si no hay orígenes configurados, no se pasa whitelist (comportamiento abierto)
+// para no romper en un despliegue sin configurar — endurece poniendo ADMIN_ORIGIN.
+const allowedOrigins = [
+  process.env.ADMIN_ORIGIN,
+  'https://desna.io',
+  'https://www.desna.io',
+].filter(Boolean)
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Permitir peticiones sin origin (apps móviles, curl, health checks)
+    if (!origin) return callback(null, true)
+    if (allowedOrigins.length === 0) return callback(null, true)
+    if (allowedOrigins.includes(origin)) return callback(null, true)
+    return callback(new Error('Origen no permitido por CORS'))
+  },
+  credentials: true,
+}))
 app.use(express.json())
 app.set('trust proxy', 1)
 
