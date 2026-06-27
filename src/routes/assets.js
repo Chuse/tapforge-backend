@@ -822,4 +822,49 @@ router.post('/sync-tron', async (req, res) => {
   }
 })
 
+// ─── POST /assets/sync-chain-logos ────────────────────────────────────────
+// Mirrorea a R2 los logos de las CHAINS (no de los tokens). Estos logos se usan
+// también como icono de la MONEDA NATIVA (TRX, ETH, KLV) en el cliente, así que
+// conviene que salgan de nuestro storage y no de Trust Wallet.
+// Guarda en chains.logo la URL de R2 (clave: chain-logos/{chainId}).
+
+router.post('/sync-chain-logos', async (req, res) => {
+  if (!isAdmin(req)) {
+    return res.status(401).json({ error: 'No autorizado' })
+  }
+  if (!isR2Configured()) {
+    return res.status(400).json({ error: 'R2 no está configurado' })
+  }
+
+  try {
+    const chains = await pool.query('SELECT id, logo FROM chains')
+    const base = process.env.R2_PUBLIC_BASE
+    let mirrored = 0
+    const results = []
+
+    for (const chain of chains.rows) {
+      // Saltar si no tiene logo o ya está en R2
+      if (!chain.logo || chain.logo.startsWith(base)) {
+        results.push({ chain: chain.id, status: chain.logo ? 'ya en R2' : 'sin logo' })
+        continue
+      }
+
+      // Mirror con clave especial chain-logos/{id} (no logos/{chain}/{token})
+      const url = await mirrorLogo('chain-logos', chain.id, chain.logo)
+      if (url) {
+        await pool.query('UPDATE chains SET logo = $1, updated_at = NOW() WHERE id = $2', [url, chain.id])
+        mirrored++
+        results.push({ chain: chain.id, status: 'mirroreado', url })
+      } else {
+        results.push({ chain: chain.id, status: 'fallo (origen no accesible)' })
+      }
+    }
+
+    res.json({ success: true, mirrored, results })
+  } catch (e) {
+    console.error('[assets] Error sync chain logos:', e.message)
+    res.status(500).json({ error: 'Error mirroreando logos de chains', detail: e.message })
+  }
+})
+
 module.exports = router
