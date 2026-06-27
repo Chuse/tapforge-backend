@@ -647,10 +647,17 @@ router.post('/sync-evm', async (req, res) => {
       return res.status(500).json({ error: 'La token list vino vacía' })
     }
 
+    // Leer qué chains existen DE VERDAD en la tabla (evita violar la FK si una
+    // chain del mapa, p.ej. polygon, aún no está creada). Solo metemos tokens
+    // de chains presentes; las demás se ignoran sin romper el sync.
+    const existing = await pool.query('SELECT id FROM chains')
+    const existingChains = new Set(existing.rows.map(r => r.id))
+
     const rows = []
     for (const t of tokens) {
       const chainId = EVM_CHAINID_MAP[t.chainId]
-      if (!chainId) continue
+      if (!chainId) continue                      // chain no soportada por el mapa
+      if (!existingChains.has(chainId)) continue  // chain no creada en la tabla
       if (!t.address || !t.symbol) continue
 
       rows.push({
@@ -725,6 +732,119 @@ router.post('/sync-evm', async (req, res) => {
   } catch (e) {
     console.error('[assets] Error sync EVM:', e.message)
     res.status(500).json({ error: 'Error en la sincronización EVM', detail: e.message })
+  }
+})
+
+// ─── POST /assets/sync-tron ───────────────────────────────────────────────
+// Sincroniza tokens TRC-20 curados desde la token list de Trust Wallet (Tron).
+// Mismo patrón que sync-evm. OJO: las direcciones Tron son Base58 (T...) y son
+// CASE-SENSITIVE — NO se pasan a minúsculas (a diferencia de EVM).
+
+const TRON_TOKENLIST = 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/tron/tokenlist.json'
+
+// Featured TRC-20: los grandes (stablecoins y tokens líderes de Tron).
+const TRON_FEATURED = new Set([
+  'USDT', 'USDC', 'TUSD', 'USDD', 'WTRX', 'JST', 'SUN', 'BTT', 'WIN', 'NFT',
+])
+
+async function fetchTronTokenList() {
+  const r = await fetch(TRON_TOKENLIST, { headers: { Accept: 'application/json' } })
+  if (!r.ok) throw new Error(`No se pudo descargar la token list de Tron (${r.status})`)
+  return await r.json()
+}
+
+router.post('/sync-tron', async (req, res) => {
+  if (!isAdmin(req)) {
+    return res.status(401).json({ error: 'No autorizado' })
+  }
+
+  try {
+    console.log('[assets] Sincronizando tokens TRC-20 (Trust Wallet list)...')
+
+    // Verificar que la chain 'tron' existe (evita violar la FK)
+    const existing = await pool.query("SELECT id FROM chains WHERE id = 'tron'")
+    if (existing.rows.length === 0) {
+      return res.status(400).json({ error: "La chain 'tron' no existe en la tabla chains" })
+    }
+
+    const list = await fetchTronTokenList()
+    const tokens = Array.isArray(list?.tokens) ? list.tokens : []
+    if (tokens.length === 0) {
+      return res.status(500).json({ error: 'La token list de Tron vino vacía' })
+    }
+
+    const rows = []
+    for (const t of tokens) {
+      if (!t.address || !t.symbol) continue
+      // Tron Base58: NO normalizar a minúsculas (case-sensitive)
+      rows.push({
+        id:        String(t.address),
+        chain_id:  'tron',
+        name:      t.name ?? t.symbol,
+        symbol:    t.symbol,
+        precision: Number.isFinite(t.decimals) ? t.decimals : 6,
+        logo:      t.logoURI ?? null,
+        featured:  TRON_FEATURED.has(String(t.symbol).toUpperCase()),
+      })
+    }
+
+    if (rows.length === 0) {
+      return res.status(500).json({ error: 'No se obtuvieron tokens válidos de la lista' })
+    }
+
+    const client = await pool.connect()
+    let mirrored = 0
+
+    try {
+      await client.query('BEGIN')
+
+      for (const token of rows) {
+        let logoUrl = token.logo
+        if (token.featured && isR2Configured() && token.logo) {
+          const url = await mirrorLogo(token.chain_id, token.id, token.logo)
+          if (url) { logoUrl = url; mirrored++ }
+        }
+
+        await client.query(
+          `
+          INSERT INTO tokens (id, chain_id, name, symbol, precision, featured, logo, synced_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+          ON CONFLICT (id, chain_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            symbol = EXCLUDED.symbol,
+            precision = EXCLUDED.precision,
+            logo = EXCLUDED.logo,
+            synced_at = NOW()
+          `,
+          [
+            token.id,
+            token.chain_id,
+            token.name,
+            token.symbol,
+            token.precision,
+            token.featured,
+            logoUrl,
+          ]
+        )
+      }
+
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
+
+    res.json({
+      success: true,
+      synced: rows.length,
+      mirrored,
+      message: `${rows.length} tokens TRC-20 sincronizados (${mirrored} logos featured a R2)`,
+    })
+  } catch (e) {
+    console.error('[assets] Error sync Tron:', e.message)
+    res.status(500).json({ error: 'Error en la sincronización Tron', detail: e.message })
   }
 })
 
