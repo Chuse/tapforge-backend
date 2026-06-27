@@ -10,11 +10,15 @@ const { isR2Configured, mirrorLogo, publicUrlForKey } = require('../r2')
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 
 const KLEVER_API = 'https://api.mainnet.klever.org/v1.0'
-const ADMIN_SECRET = process.env.ADMIN_SECRET ?? 'tapforge-admin-secret'
+// El admin secret SOLO viene de la variable de entorno. Sin fallback: un valor
+// por defecto conocido (y en un repo público) sería un agujero de seguridad.
+const ADMIN_SECRET = process.env.ADMIN_SECRET
 
 const PARAM_REGEX = /^[a-zA-Z0-9_\-]{1,50}$/
 
 function isAdmin(req) {
+  // Si no hay secreto configurado, denegar SIEMPRE (nunca abrir admin por defecto).
+  if (!ADMIN_SECRET) return false
   return req.headers['x-admin-secret'] === ADMIN_SECRET
 }
 
@@ -48,6 +52,30 @@ function toBool(value, fallback = false) {
 function toInt(value, fallback = 99) {
   const n = Number(value)
   return Number.isFinite(n) ? Math.trunc(n) : fallback
+}
+
+// Decimales de la moneda NATIVA por símbolo (no están en la tabla chains).
+// Coincide con CHAIN_CONFIGS del cliente (walletTypes.ts).
+const NATIVE_DECIMALS = {
+  KLV: 6, TRX: 6, ETH: 18, BTC: 8, POL: 18, MATIC: 18,
+}
+
+// Construye el "token" de la moneda nativa desde la fila de chains. El nativo no
+// es un token de contrato (no tiene address): su id es el símbolo, y su logo es
+// el de la chain (ya mirroreado a R2). El cliente lo muestra SIEMPRE primero.
+function buildNativeToken(chain) {
+  if (!chain) return null
+  const symbol = chain.symbol
+  return {
+    id:        symbol,                          // el nativo se identifica por símbolo
+    chain_id:  chain.id,
+    name:      chain.display_name || chain.name,
+    symbol,
+    precision: NATIVE_DECIMALS[symbol] ?? 18,
+    featured:  true,                            // el nativo siempre destacado
+    logo:      chain.logo ?? null,              // logo de la chain (en R2)
+    native:    true,                            // marca para el cliente
+  }
 }
 
 // ─── GET /assets/chains ───────────────────────────────────────────────────
@@ -314,6 +342,7 @@ router.get('/chains/:chainId', async (req, res) => {
 
     res.json({
       chain: chainResult.rows[0],
+      nativeToken: buildNativeToken(chainResult.rows[0]),
       tokens: tokensResult.rows,
       total,
       page,
