@@ -603,4 +603,129 @@ router.post('/r2-test', async (req, res) => {
   }
 })
 
+// ─── POST /assets/sync-evm ────────────────────────────────────────────────
+// Sincroniza tokens EVM curados (Ethereum, Base, Polygon) desde la Uniswap
+// default token list. Mismo patrón que /sync: metadata curada + mirror a R2.
+// El `id` de cada token EVM es su dirección de contrato (en minúsculas).
+
+const UNISWAP_TOKENLIST = 'https://ipfs.io/ipns/tokens.uniswap.org'
+const UNISWAP_TOKENLIST_FALLBACK = 'https://gateway.ipfs.io/ipns/tokens.uniswap.org'
+
+// chainId EIP-155 → chain_id de la tabla (coincide con CHAIN_CONFIGS del cliente)
+const EVM_CHAINID_MAP = {
+  1:    'ethereum',
+  8453: 'base',
+  137:  'polygon',
+}
+
+// Featured: tokens grandes que se mirrorean a R2 de inmediato (el resto, lazy).
+const EVM_FEATURED = new Set([
+  'WETH', 'USDC', 'USDT', 'DAI', 'WBTC', 'UNI', 'LINK', 'AAVE',
+])
+
+async function fetchUniswapTokenList() {
+  for (const url of [UNISWAP_TOKENLIST, UNISWAP_TOKENLIST_FALLBACK]) {
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' } })
+      if (r.ok) return await r.json()
+    } catch { /* probar siguiente */ }
+  }
+  throw new Error('No se pudo descargar la token list de Uniswap')
+}
+
+router.post('/sync-evm', async (req, res) => {
+  if (!isAdmin(req)) {
+    return res.status(401).json({ error: 'No autorizado' })
+  }
+
+  try {
+    console.log('[assets] Sincronizando tokens EVM (Uniswap list)...')
+
+    const list = await fetchUniswapTokenList()
+    const tokens = Array.isArray(list?.tokens) ? list.tokens : []
+    if (tokens.length === 0) {
+      return res.status(500).json({ error: 'La token list vino vacía' })
+    }
+
+    const rows = []
+    for (const t of tokens) {
+      const chainId = EVM_CHAINID_MAP[t.chainId]
+      if (!chainId) continue
+      if (!t.address || !t.symbol) continue
+
+      rows.push({
+        id:        String(t.address).toLowerCase(),
+        chain_id:  chainId,
+        name:      t.name ?? t.symbol,
+        symbol:    t.symbol,
+        precision: Number.isFinite(t.decimals) ? t.decimals : 18,
+        logo:      t.logoURI ?? null,
+        featured:  EVM_FEATURED.has(String(t.symbol).toUpperCase()),
+      })
+    }
+
+    if (rows.length === 0) {
+      return res.status(500).json({ error: 'No hay tokens de chains soportadas en la lista' })
+    }
+
+    const client = await pool.connect()
+    let mirrored = 0
+
+    try {
+      await client.query('BEGIN')
+
+      for (const token of rows) {
+        let logoUrl = token.logo
+        if (token.featured && isR2Configured() && token.logo) {
+          const url = await mirrorLogo(token.chain_id, token.id, token.logo)
+          if (url) { logoUrl = url; mirrored++ }
+        }
+
+        await client.query(
+          `
+          INSERT INTO tokens (id, chain_id, name, symbol, precision, featured, logo, synced_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+          ON CONFLICT (id, chain_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            symbol = EXCLUDED.symbol,
+            precision = EXCLUDED.precision,
+            logo = EXCLUDED.logo,
+            synced_at = NOW()
+          `,
+          [
+            token.id,
+            token.chain_id,
+            token.name,
+            token.symbol,
+            token.precision,
+            token.featured,
+            logoUrl,
+          ]
+        )
+      }
+
+      await client.query('COMMIT')
+    } catch (e) {
+      await client.query('ROLLBACK')
+      throw e
+    } finally {
+      client.release()
+    }
+
+    const byChain = {}
+    for (const r of rows) byChain[r.chain_id] = (byChain[r.chain_id] || 0) + 1
+
+    res.json({
+      success: true,
+      synced: rows.length,
+      mirrored,
+      byChain,
+      message: `${rows.length} tokens EVM sincronizados (${mirrored} logos featured a R2)`,
+    })
+  } catch (e) {
+    console.error('[assets] Error sync EVM:', e.message)
+    res.status(500).json({ error: 'Error en la sincronización EVM', detail: e.message })
+  }
+})
+
 module.exports = router
