@@ -215,8 +215,88 @@ function buildWalletSummary(address, summary, title, validatorList = []) {
 function createBot(pool) {
   const bot = new Telegraf(BOT_TOKEN)
 
-  // /start
+  // /start (con o sin código de vinculación de Desna Wallet)
   bot.command('start', async (ctx) => {
+    const args = ctx.message.text.split(' ').slice(1)
+    const code = args[0]?.trim()
+
+    // ── Vinculación desde la app Desna ──────────────────────────
+    if (code && code.length > 10) {
+      try {
+        const result = await pool.query(
+          `SELECT wallet_address, link_code_expires_at
+           FROM telegram_connections
+           WHERE link_code = $1`,
+          [code]
+        )
+
+        if (!result.rows.length) {
+          return ctx.reply(
+            '❌ *Código inválido*\n\nEste código no existe o ya fue usado\\.\nGenera uno nuevo desde la app Desna\\.',
+            { parse_mode: 'MarkdownV2' }
+          )
+        }
+
+        const { wallet_address, link_code_expires_at } = result.rows[0]
+
+        if (new Date() > new Date(link_code_expires_at)) {
+          return ctx.reply(
+            '⏱ *Código expirado*\n\nEl código solo es válido 10 minutos\\.\nGenera uno nuevo desde la app Desna\\.',
+            { parse_mode: 'MarkdownV2' }
+          )
+        }
+
+        const chatId = ctx.from.id
+
+        // Si este chat_id ya está vinculado a otra wallet, desactivar la anterior
+        await pool.query(
+          `UPDATE telegram_connections
+           SET is_active = FALSE, updated_at = NOW()
+           WHERE telegram_chat_id = $1 AND wallet_address != $2`,
+          [chatId, wallet_address]
+        )
+
+        // Vincular
+        await pool.query(
+          `UPDATE telegram_connections
+           SET telegram_chat_id      = $1,
+               telegram_username     = $2,
+               is_active             = TRUE,
+               link_code             = NULL,
+               link_code_expires_at  = NULL,
+               linked_at             = NOW(),
+               updated_at            = NOW()
+           WHERE wallet_address = $3`,
+          [chatId, ctx.from.username ?? null, wallet_address]
+        )
+
+        // Crear preferencias por defecto si no existen
+        await pool.query(
+          `INSERT INTO notification_preferences (wallet_address)
+           VALUES ($1) ON CONFLICT DO NOTHING`,
+          [wallet_address]
+        )
+
+        const shortWallet = `${wallet_address.slice(0, 8)}...${wallet_address.slice(-6)}`
+
+        return ctx.reply(
+          `✅ *Wallet vinculada*\n\n` +
+          `\`${escapeMarkdown(shortWallet)}\` ya está conectada a este chat\\.\n\n` +
+          `Desde la app Desna puedes configurar qué alertas quieres recibir aquí:\n\n` +
+          `• 💸 Transacciones recibidas\n` +
+          `• 📊 Alertas de precio\n` +
+          `• ⏳ Vencimiento de delegaciones\n` +
+          `• 🚨 Cambios en validadores\n` +
+          `• 🎁 Resumen de rewards`,
+          { parse_mode: 'MarkdownV2' }
+        )
+      } catch (err) {
+        console.error('[bot /start link]', err.message)
+        return ctx.reply('❌ Error interno\\. Inténtalo de nuevo en unos minutos\\.', { parse_mode: 'MarkdownV2' })
+      }
+    }
+
+    // ── Bienvenida normal ────────────────────────────────────────
     const name = escapeMarkdown(ctx.from?.first_name ?? 'Anon')
     await ctx.reply(
       `👋 Hola ${name}\\!\n\n` +
@@ -230,6 +310,27 @@ function createBot(pool) {
       `/estado — ver tu suscripción y delegaciones activas\n`,
       { parse_mode: 'MarkdownV2' }
     )
+  })
+
+  // /desvincular — desvincula la wallet de Desna desde Telegram
+  bot.command('desvincular', async (ctx) => {
+    const chatId = ctx.from.id
+    try {
+      const result = await pool.query(
+        `UPDATE telegram_connections
+         SET is_active = FALSE, updated_at = NOW()
+         WHERE telegram_chat_id = $1 AND is_active = TRUE
+         RETURNING wallet_address`,
+        [chatId]
+      )
+      if (!result.rows.length) {
+        return ctx.reply('No tienes ninguna wallet vinculada\\.', { parse_mode: 'MarkdownV2' })
+      }
+      ctx.reply('✅ Wallet desvinculada correctamente\\.\n\nYa no recibirás alertas aquí\\.', { parse_mode: 'MarkdownV2' })
+    } catch (err) {
+      console.error('[bot /desvincular]', err.message)
+      ctx.reply('❌ Error interno\\. Inténtalo de nuevo\\.', { parse_mode: 'MarkdownV2' })
+    }
   })
 
   // /suscribir

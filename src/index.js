@@ -12,6 +12,7 @@ const pointsRouter      = require('./routes/points')
 
 const adminAuthRouter   = require('./routes/adminAuth')
 const adminChainsRouter = require('./routes/adminChains')
+const telegramRouter    = require('./routes/telegram')
 
 const { createBot, startEpochCron } = require('./bot')
 
@@ -104,6 +105,12 @@ app.use('/swap/changelly', changellyRouter)
 // ─────────────────────────────────────────────────────────────
 
 app.use('/swap', swapRouter)
+
+// ─────────────────────────────────────────────────────────────
+// Telegram notifications
+// ─────────────────────────────────────────────────────────────
+
+app.use('/api/telegram', telegramRouter)
 
 // ─────────────────────────────────────────────────────────────
 // 404
