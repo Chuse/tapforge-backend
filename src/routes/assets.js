@@ -736,22 +736,26 @@ router.post('/sync-evm', async (req, res) => {
 })
 
 // ─── POST /assets/sync-tron ───────────────────────────────────────────────
-// Sincroniza tokens TRC-20 curados desde la token list de Trust Wallet (Tron).
-// Mismo patrón que sync-evm. OJO: las direcciones Tron son Base58 (T...) y son
-// CASE-SENSITIVE — NO se pasan a minúsculas (a diferencia de EVM).
+// Sincroniza los TRC-20 líderes de Tron desde una lista CURADA embebida.
+// Para Tron no hay buena fuente automática (Trust Wallet casi vacía, TronScan
+// con rate limits), y la chain solo tiene un puñado de tokens relevantes — el
+// 95% del volumen es USDT. Una lista curada a mano es más fiable.
+// Direcciones verificadas contra TRON Guide / Gem Wallet / Dwellir (2026).
+// OJO: direcciones Base58 case-sensitive — NO normalizar a minúsculas.
+// Logos desde el CDN de Trust Wallet (fiable, aunque su tokenlist esté vacía).
 
-const TRON_TOKENLIST = 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/tron/tokenlist.json'
+const TRON_LOGO_BASE = 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/tron/assets'
 
-// Featured TRC-20: los grandes (stablecoins y tokens líderes de Tron).
-const TRON_FEATURED = new Set([
-  'USDT', 'USDC', 'TUSD', 'USDD', 'WTRX', 'JST', 'SUN', 'BTT', 'WIN', 'NFT',
-])
-
-async function fetchTronTokenList() {
-  const r = await fetch(TRON_TOKENLIST, { headers: { Accept: 'application/json' } })
-  if (!r.ok) throw new Error(`No se pudo descargar la token list de Tron (${r.status})`)
-  return await r.json()
-}
+const TRON_CURATED = [
+  { id: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', symbol: 'USDT', name: 'Tether USD',       decimals: 6,  featured: true },
+  { id: 'TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8', symbol: 'USDC', name: 'USD Coin',         decimals: 6,  featured: true },
+  { id: 'TPYmHEhy5n8TCEfYGqW2rPxsghSfzghPDn', symbol: 'USDD', name: 'Decentralized USD', decimals: 18, featured: true },
+  { id: 'TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9', symbol: 'JST',  name: 'JUST',             decimals: 18, featured: true },
+  { id: 'TSSMHYeV2uE9qYH95DqyoCuNCzEL1NvU3S', symbol: 'SUN',  name: 'SUN',              decimals: 18, featured: true },
+  { id: 'TAFjULxiVgT4qWk6UZwjqwZXTSaGaqnVp4', symbol: 'BTT',  name: 'BitTorrent',       decimals: 18, featured: false },
+  { id: 'TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7', symbol: 'WIN',  name: 'WINkLink',         decimals: 6,  featured: false },
+  { id: 'TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR', symbol: 'WTRX', name: 'Wrapped TRX',      decimals: 6,  featured: false },
+]
 
 router.post('/sync-tron', async (req, res) => {
   if (!isAdmin(req)) {
@@ -759,37 +763,11 @@ router.post('/sync-tron', async (req, res) => {
   }
 
   try {
-    console.log('[assets] Sincronizando tokens TRC-20 (Trust Wallet list)...')
+    console.log('[assets] Sincronizando TRC-20 curados...')
 
-    // Verificar que la chain 'tron' existe (evita violar la FK)
     const existing = await pool.query("SELECT id FROM chains WHERE id = 'tron'")
     if (existing.rows.length === 0) {
       return res.status(400).json({ error: "La chain 'tron' no existe en la tabla chains" })
-    }
-
-    const list = await fetchTronTokenList()
-    const tokens = Array.isArray(list?.tokens) ? list.tokens : []
-    if (tokens.length === 0) {
-      return res.status(500).json({ error: 'La token list de Tron vino vacía' })
-    }
-
-    const rows = []
-    for (const t of tokens) {
-      if (!t.address || !t.symbol) continue
-      // Tron Base58: NO normalizar a minúsculas (case-sensitive)
-      rows.push({
-        id:        String(t.address),
-        chain_id:  'tron',
-        name:      t.name ?? t.symbol,
-        symbol:    t.symbol,
-        precision: Number.isFinite(t.decimals) ? t.decimals : 6,
-        logo:      t.logoURI ?? null,
-        featured:  TRON_FEATURED.has(String(t.symbol).toUpperCase()),
-      })
-    }
-
-    if (rows.length === 0) {
-      return res.status(500).json({ error: 'No se obtuvieron tokens válidos de la lista' })
     }
 
     const client = await pool.connect()
@@ -798,33 +776,29 @@ router.post('/sync-tron', async (req, res) => {
     try {
       await client.query('BEGIN')
 
-      for (const token of rows) {
-        let logoUrl = token.logo
-        if (token.featured && isR2Configured() && token.logo) {
-          const url = await mirrorLogo(token.chain_id, token.id, token.logo)
+      for (const token of TRON_CURATED) {
+        const externalLogo = `${TRON_LOGO_BASE}/${token.id}/logo.png`
+
+        // Mirror SOLO de featured (los grandes). El resto, lazy en el GET.
+        let logoUrl = externalLogo
+        if (token.featured && isR2Configured()) {
+          const url = await mirrorLogo('tron', token.id, externalLogo)
           if (url) { logoUrl = url; mirrored++ }
         }
 
         await client.query(
           `
           INSERT INTO tokens (id, chain_id, name, symbol, precision, featured, logo, synced_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+          VALUES ($1, 'tron', $2, $3, $4, $5, $6, NOW())
           ON CONFLICT (id, chain_id) DO UPDATE SET
             name = EXCLUDED.name,
             symbol = EXCLUDED.symbol,
             precision = EXCLUDED.precision,
+            featured = EXCLUDED.featured,
             logo = EXCLUDED.logo,
             synced_at = NOW()
           `,
-          [
-            token.id,
-            token.chain_id,
-            token.name,
-            token.symbol,
-            token.precision,
-            token.featured,
-            logoUrl,
-          ]
+          [token.id, token.name, token.symbol, token.decimals, token.featured, logoUrl]
         )
       }
 
@@ -838,9 +812,9 @@ router.post('/sync-tron', async (req, res) => {
 
     res.json({
       success: true,
-      synced: rows.length,
+      synced: TRON_CURATED.length,
       mirrored,
-      message: `${rows.length} tokens TRC-20 sincronizados (${mirrored} logos featured a R2)`,
+      message: `${TRON_CURATED.length} TRC-20 curados sincronizados (${mirrored} logos featured a R2)`,
     })
   } catch (e) {
     console.error('[assets] Error sync Tron:', e.message)
