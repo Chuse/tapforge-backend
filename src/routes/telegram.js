@@ -2,7 +2,16 @@
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
-const pool = require('../db');
+const { pool } = require('../db');
+
+// Validación de dirección Klever (bech32 'klv1' + 58 chars del charset bech32).
+// Evita que entren basura/inyecciones de formato en las tablas y que se
+// disparen llamadas al API de Klever con direcciones inventadas.
+const KLV_ADDRESS_RE = /^klv1[023456789acdefghjklmnpqrstuvwxyz]{58}$/;
+
+function isValidKleverAddress(addr) {
+  return typeof addr === 'string' && KLV_ADDRESS_RE.test(addr);
+}
 
 // ============================================================
 // POST /api/telegram/link-code
@@ -14,6 +23,9 @@ router.post('/link-code', async (req, res) => {
     const { wallet_address } = req.body;
     if (!wallet_address) {
       return res.status(400).json({ error: 'wallet_address required' });
+    }
+    if (!isValidKleverAddress(wallet_address)) {
+      return res.status(400).json({ error: 'wallet_address inválida' });
     }
 
     const code = crypto.randomBytes(24).toString('hex');
@@ -50,6 +62,9 @@ router.post('/link-code', async (req, res) => {
 router.get('/status/:wallet_address', async (req, res) => {
   try {
     const { wallet_address } = req.params;
+    if (!isValidKleverAddress(wallet_address)) {
+      return res.status(400).json({ error: 'wallet_address inválida' });
+    }
 
     const result = await pool.query(
       `SELECT telegram_chat_id, telegram_username, linked_at, is_active
@@ -77,6 +92,9 @@ router.get('/status/:wallet_address', async (req, res) => {
 router.delete('/unlink/:wallet_address', async (req, res) => {
   try {
     const { wallet_address } = req.params;
+    if (!isValidKleverAddress(wallet_address)) {
+      return res.status(400).json({ error: 'wallet_address inválida' });
+    }
 
     await pool.query(
       `UPDATE telegram_connections
@@ -100,6 +118,9 @@ router.delete('/unlink/:wallet_address', async (req, res) => {
 router.get('/preferences/:wallet_address', async (req, res) => {
   try {
     const { wallet_address } = req.params;
+    if (!isValidKleverAddress(wallet_address)) {
+      return res.status(400).json({ error: 'wallet_address inválida' });
+    }
 
     const result = await pool.query(
       `SELECT
@@ -150,6 +171,9 @@ router.get('/preferences/:wallet_address', async (req, res) => {
 router.put('/preferences/:wallet_address', async (req, res) => {
   try {
     const { wallet_address } = req.params;
+    if (!isValidKleverAddress(wallet_address)) {
+      return res.status(400).json({ error: 'wallet_address inválida' });
+    }
 
     const ALLOWED_FIELDS = [
       'price_change_enabled', 'price_change_pct',
