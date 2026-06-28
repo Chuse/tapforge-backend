@@ -446,9 +446,65 @@ async function getPreviousSnapshot(pool, epochNumber) {
   }
 }
 
+// ─── Diff de validadores entre dos épocas ────────────────────────────────────
+
+/**
+ * Compara dos listas de validadores (current vs previous) y devuelve solo los
+ * que cambiaron algo relevante. Función pura, agnóstica del usuario y de la
+ * unidad de comisión (pasa los valores crudos tal cual se guardaron).
+ */
+function diffValidators(currentList, previousList) {
+  const prevByAddr = new Map((previousList ?? []).map(v => [v.address, v]))
+  const changes = []
+
+  for (const curr of currentList ?? []) {
+    const prev = prevByAddr.get(curr.address)
+    if (!prev) continue // validador nuevo: no es un "cambio" para un delegador existente
+
+    const becameJailed     = !prev.jailed  && !!curr.jailed
+    const becameDeselected = !!prev.elected && !curr.elected
+    const commissionPrev   = prev.commission ?? 0
+    const commissionCurr   = curr.commission ?? 0
+    const commissionChanged = commissionPrev !== commissionCurr
+
+    if (!becameJailed && !becameDeselected && !commissionChanged) continue
+
+    changes.push({
+      address:         curr.address,
+      name:            curr.name || '',
+      commissionPrev,
+      commissionCurr,
+      becameJailed,
+      becameDeselected,
+    })
+  }
+
+  return changes
+}
+
+/**
+ * Lee las dos últimas snapshots de la BD y devuelve el diff. Esto es lo que
+ * consume el endpoint y la app.
+ */
+async function getLatestValidatorChanges(pool) {
+  const res = await pool.query(
+    'SELECT epoch_number, validator_list FROM bot_epoch_snapshots ORDER BY epoch_number DESC LIMIT 2'
+  )
+  if (res.rows.length < 2) {
+    return { epoch: res.rows[0]?.epoch_number ?? null, changes: [] }
+  }
+  const [current, previous] = res.rows
+  return {
+    epoch:   current.epoch_number,
+    changes: diffValidators(current.validator_list ?? [], previous.validator_list ?? []),
+  }
+}
+
 module.exports = {
   collectEpochSnapshot,
   saveEpochSnapshot,
   getPreviousSnapshot,
   getNodeStatus,
+  diffValidators,
+  getLatestValidatorChanges,
 }
