@@ -9,6 +9,7 @@ const changellyRouter   = require('./routes/changelly')
 const swapRouter        = require('./routes/swap')
 const assetsRouter      = require('./routes/assets')
 const pointsRouter      = require('./routes/points')
+const validatorsRouter  = require('./routes/validators')
 
 const adminAuthRouter   = require('./routes/adminAuth')
 const adminChainsRouter = require('./routes/adminChains')
@@ -115,6 +116,12 @@ app.use('/assets', assetsRouter)
 // ─────────────────────────────────────────────────────────────
 
 app.use('/points', pointsRouter)
+
+// ─────────────────────────────────────────────────────────────
+// Validators (semáforo de salud)
+// ─────────────────────────────────────────────────────────────
+
+app.use('/validators', validatorsRouter)
 
 // ─────────────────────────────────────────────────────────────
 // Changelly
