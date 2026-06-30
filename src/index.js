@@ -10,6 +10,7 @@ const swapRouter        = require('./routes/swap')
 const assetsRouter      = require('./routes/assets')
 const pointsRouter      = require('./routes/points')
 const validatorsRouter  = require('./routes/validators')
+const plusRouter        = require('./routes/plus')
 
 const adminAuthRouter   = require('./routes/adminAuth')
 const adminChainsRouter = require('./routes/adminChains')
@@ -122,6 +123,12 @@ app.use('/points', pointsRouter)
 // ─────────────────────────────────────────────────────────────
 
 app.use('/validators', validatorsRouter)
+
+// ─────────────────────────────────────────────────────────────
+// Desna+ (suscripción)
+// ─────────────────────────────────────────────────────────────
+
+app.use('/plus', plusRouter)
 
 // ─────────────────────────────────────────────────────────────
 // Changelly
