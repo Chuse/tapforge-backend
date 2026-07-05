@@ -86,11 +86,21 @@ async function initDB() {
       ALTER TABLE chains ADD COLUMN IF NOT EXISTS display_name TEXT;
       ALTER TABLE chains ADD COLUMN IF NOT EXISTS logo TEXT;
 
+      -- notification_log nació solo para deduplicar alertas de Telegram
+      -- (wallet_address + alert_type + reference_id). Le añadimos contenido
+      -- real para que también pueda alimentar la campana dentro de la app.
+      ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS title   TEXT;
+      ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS body    TEXT;
+      ALTER TABLE notification_log ADD COLUMN IF NOT EXISTS read_at TIMESTAMP;
+
       ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS name TEXT;
       ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'admin';
       ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS enabled BOOLEAN DEFAULT true;
       ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP;
       ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+
+      CREATE INDEX IF NOT EXISTS idx_notification_log_wallet_sent
+        ON notification_log (wallet_address, sent_at DESC);
     `)
 
     await client.query(`
