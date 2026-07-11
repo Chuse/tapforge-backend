@@ -17,6 +17,7 @@ const adminChainsRouter = require('./routes/adminChains')
 const telegramRouter    = require('./routes/telegram')
 
 const { createBot, startEpochCron } = require('./bot')
+const custodialService = require('./custodialService')
 
 const app  = express()
 const PORT = process.env.PORT ?? 8080
@@ -163,7 +164,9 @@ app.use((req, res) => {
 // ─────────────────────────────────────────────────────────────
 
 initDB()
-  .then(() => {
+  .then(async () => {
+    await custodialService.ensureCustodialTable()
+
     app.listen(PORT, () => {
       console.log(`TapForge Backend corriendo en puerto ${PORT}`)
     })

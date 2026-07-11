@@ -11,6 +11,7 @@ const crypto       = require('crypto')
 const { collectEpochSnapshot, saveEpochSnapshot, getPreviousSnapshot } = require('./epochService')
 const { buildEpochReport, buildEpochMessages }                          = require('./reportService')
 const { runPersonalAlerts, getDelegationsSummary }                      = require('./alertService')
+const custodialService                                                  = require('./custodialService')
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 
@@ -646,6 +647,87 @@ function createBot(pool) {
     } catch (err) {
       console.error('[bot] Error en /wallet:', err.message)
       await ctx.replyWithHTML('❌ Error al verificar la dirección. Inténtalo más tarde.')
+    }
+  })
+
+  // /enviar CANTIDAD DIRECCION TOKEN
+  bot.command('enviar', async (ctx) => {
+    const telegramId = ctx.from.id
+    const args       = ctx.message.text.split(' ').slice(1)
+
+    if (args.length < 3) {
+      return ctx.replyWithHTML(
+        `⚠️ <b>Formato incorrecto</b>\n\n` +
+        `Uso: <code>/enviar CANTIDAD DIRECCION TOKEN</code>\n` +
+        `Ejemplo: <code>/enviar 10 klv1abcde...xyz KLV</code>`
+      )
+    }
+
+    const [amountStr, destinationRaw, tokenSymbolRaw] = args
+    const destination = destinationRaw.trim().toLowerCase()
+    const tokenSymbol = tokenSymbolRaw.trim().toUpperCase()
+
+    // Validar cantidad
+    const amount = parseFloat(amountStr.replace(',', '.'))
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return ctx.replyWithHTML('❌ Cantidad inválida. Debe ser un número mayor que 0.')
+    }
+
+    // Validar dirección destino (solo klv1..., sin resolución .klv)
+    if (!/^klv1[a-z0-9]{58}$/.test(destination)) {
+      return ctx.replyWithHTML('❌ Dirección destino inválida. Debe empezar por <code>klv1</code>.')
+    }
+
+    // Resolver token contra la tabla tokens (chain_id = 'klever')
+    const tokenRes = await pool.query(
+      `SELECT id, precision FROM tokens WHERE chain_id = 'klever' AND UPPER(symbol) = $1 LIMIT 1`,
+      [tokenSymbol]
+    )
+    if (tokenRes.rows.length === 0) {
+      return ctx.replyWithHTML(`❌ Token <b>${escapeHtml(tokenSymbol)}</b> no reconocido.`)
+    }
+    const { id: tokenId, precision } = tokenRes.rows[0]
+
+    try {
+      // Wallet custodial: crearla automáticamente si es la primera vez
+      let address = await custodialService.getCustodialAddress(telegramId)
+      if (!address) {
+        const created = await custodialService.createWallet(telegramId)
+        if (!created.success) {
+          console.error('[enviar] Error creando wallet custodial:', created.error)
+          return ctx.replyWithHTML('❌ No se pudo crear tu wallet. Inténtalo más tarde.')
+        }
+        address = created.address
+        return ctx.replyWithHTML(
+          `🆕 <b>Wallet creada</b>\n\n` +
+          `<code>${escapeHtml(address)}</code>\n\n` +
+          `Aún no tiene fondos. Deposita ${escapeHtml(tokenSymbol)} en esa dirección y vuelve a ejecutar el comando <code>/enviar</code>.`
+        )
+      }
+
+      // Evitar enviar a la propia wallet por error
+      if (destination === address.toLowerCase()) {
+        return ctx.replyWithHTML('⚠️ La dirección destino coincide con tu propia wallet. Operación cancelada.')
+      }
+
+      await ctx.replyWithHTML('⏳ Enviando...')
+
+      const result = await custodialService.sendTransfer(telegramId, destination, amount, tokenId, precision)
+
+      if (result.success) {
+        await ctx.replyWithHTML(
+          `✅ <b>Envío realizado</b>\n\n` +
+          `<b>Cantidad:</b> ${escapeHtml(amount)} ${escapeHtml(tokenSymbol)}\n` +
+          `<b>Destino:</b> <code>${escapeHtml(destination)}</code>\n` +
+          `<b>Hash:</b> <code>${escapeHtml(result.txHash)}</code>`
+        )
+      } else {
+        console.error('[enviar] Error en sendTransfer:', result.error)
+        await ctx.replyWithHTML(`❌ Error al enviar: ${escapeHtml(String(result.error))}`)
+      }
+    } catch (err) {
+      console.error('[enviar] Error inesperado:', err.message)
+      await ctx.replyWithHTML('❌ Error interno. Inténtalo de nuevo más tarde.')
     }
   })
 
