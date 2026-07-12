@@ -150,6 +150,23 @@ app.use('/swap', swapRouter)
 app.use('/api/telegram', telegramRouter)
 
 // ─────────────────────────────────────────────────────────────
+// Telegram bot — webhook (en vez de polling, evita el 409 en
+// deploys sin downtime: dos instancias no pueden competir por
+// getUpdates si Telegram empuja los mensajes por HTTP)
+// ─────────────────────────────────────────────────────────────
+
+const bot = createBot(pool)
+
+const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET
+if (!TELEGRAM_WEBHOOK_SECRET) {
+  console.error('❌ Falta TELEGRAM_WEBHOOK_SECRET en las variables de entorno.')
+  process.exit(1)
+}
+const WEBHOOK_PATH = `/telegram-webhook/${TELEGRAM_WEBHOOK_SECRET}`
+
+app.use(bot.webhookCallback(WEBHOOK_PATH, { secretToken: TELEGRAM_WEBHOOK_SECRET }))
+
+// ─────────────────────────────────────────────────────────────
 // 404
 // ─────────────────────────────────────────────────────────────
 
@@ -171,16 +188,11 @@ initDB()
       console.log(`TapForge Backend corriendo en puerto ${PORT}`)
     })
 
-    const bot = createBot(pool)
-
     startEpochCron(pool, bot)
 
-    bot.launch().then(() => {
-      console.log('[bot] Desna bot iniciado en modo polling')
-    })
-
-    process.once('SIGINT', () => bot.stop('SIGINT'))
-    process.once('SIGTERM', () => bot.stop('SIGTERM'))
+    const webhookUrl = `${process.env.TELEGRAM_WEBHOOK_URL}${WEBHOOK_PATH}`
+    await bot.telegram.setWebhook(webhookUrl, { secret_token: TELEGRAM_WEBHOOK_SECRET })
+    console.log(`[bot] Webhook configurado: ${process.env.TELEGRAM_WEBHOOK_URL}${WEBHOOK_PATH.replace(TELEGRAM_WEBHOOK_SECRET, '***')}`)
   })
   .catch(err => {
     console.error('Error iniciando la base de datos:', err)
