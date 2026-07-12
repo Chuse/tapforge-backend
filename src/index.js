@@ -157,7 +157,7 @@ app.use('/api/telegram', telegramRouter)
 
 const bot = createBot(pool)
 
-const TELEGRAM_WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET
+const TELEGRAM_WEBHOOK_SECRET = (process.env.TELEGRAM_WEBHOOK_SECRET || '').trim()
 if (!TELEGRAM_WEBHOOK_SECRET) {
   console.error('❌ Falta TELEGRAM_WEBHOOK_SECRET en las variables de entorno.')
   process.exit(1)
@@ -190,9 +190,10 @@ initDB()
 
     startEpochCron(pool, bot)
 
-    const webhookUrl = `${process.env.TELEGRAM_WEBHOOK_URL}${WEBHOOK_PATH}`
+    const webhookBase = (process.env.TELEGRAM_WEBHOOK_URL || '').trim().replace(/\/+$/, '')
+    const webhookUrl = `${webhookBase}${WEBHOOK_PATH}`
     await bot.telegram.setWebhook(webhookUrl, { secret_token: TELEGRAM_WEBHOOK_SECRET })
-    console.log(`[bot] Webhook configurado: ${process.env.TELEGRAM_WEBHOOK_URL}${WEBHOOK_PATH.replace(TELEGRAM_WEBHOOK_SECRET, '***')}`)
+    console.log(`[bot] Webhook configurado: ${webhookBase}${WEBHOOK_PATH.replace(TELEGRAM_WEBHOOK_SECRET, '***')}`)
   })
   .catch(err => {
     console.error('Error iniciando la base de datos:', err)
