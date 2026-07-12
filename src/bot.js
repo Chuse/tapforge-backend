@@ -658,12 +658,12 @@ function createBot(pool) {
     if (args.length < 3) {
       return ctx.replyWithHTML(
         `⚠️ <b>Formato incorrecto</b>\n\n` +
-        `Uso: <code>/enviar CANTIDAD DIRECCION TOKEN</code>\n` +
-        `Ejemplo: <code>/enviar 10 klv1abcde...xyz KLV</code>`
+        `Uso: <code>/enviar CANTIDAD TOKEN DIRECCION</code>\n` +
+        `Ejemplo: <code>/enviar 10 KLV klv1abcde...xyz</code>`
       )
     }
 
-    const [amountStr, destinationRaw, tokenSymbolRaw] = args
+    const [amountStr, tokenSymbolRaw, destinationRaw] = args
     const destination = destinationRaw.trim().toLowerCase()
     const tokenSymbol = tokenSymbolRaw.trim().toUpperCase()
 
