@@ -731,6 +731,39 @@ function createBot(pool) {
     }
   })
 
+  // /misaldo — ver dirección y saldo de la wallet custodial
+  bot.command('misaldo', async (ctx) => {
+    const telegramId = ctx.from.id
+
+    const address = await custodialService.getCustodialAddress(telegramId)
+    if (!address) {
+      return ctx.replyWithHTML(
+        `📭 <b>Aún no tienes wallet</b>\n\n` +
+        `Se crea automáticamente la primera vez que uses <code>/enviar</code>.`
+      )
+    }
+
+    await ctx.replyWithHTML('🔍 Consultando saldo...')
+
+    try {
+      const { klv, tokens } = await custodialService.getBalance(address)
+
+      let msg = `👛 <b>Tu wallet</b>\n\n<code>${escapeHtml(address)}</code>\n\n` +
+                `<b>KLV:</b> ${escapeHtml(klv)}`
+
+      const tokenEntries = Object.entries(tokens)
+      if (tokenEntries.length > 0) {
+        msg += '\n\n<b>Otros tokens:</b>\n' +
+          tokenEntries.map(([id, bal]) => `  • ${escapeHtml(id)}: ${escapeHtml(bal)}`).join('\n')
+      }
+
+      await ctx.replyWithHTML(msg)
+    } catch (err) {
+      console.error('[misaldo] Error:', err.message)
+      await ctx.replyWithHTML('❌ Error al consultar el saldo. Inténtalo más tarde.')
+    }
+  })
+
   // /admin — solo admin
   bot.command('admin', async (ctx) => {
     if (ctx.from.id !== ADMIN_TELEGRAM_ID) return
