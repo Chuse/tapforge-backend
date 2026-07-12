@@ -302,13 +302,7 @@ function createBot(pool) {
     await ctx.reply(
       `👋 Hola ${name}\\!\n\n` +
       `Soy *Lyra*, el analista de red de Desna\\.\n\n` +
-      `Monitorizo la red Klever en tiempo real y publico un informe completo al cierre de cada época \\(cada 6 horas\\) en el canal privado de suscriptores, con estadísticas de red, actividad on\\-chain, estado de validadores y mucho más\\.\n\n` +
-      `*Comandos disponibles:*\n` +
-      `/suscribir — obtén acceso al canal premium \\(\\$2 en KLV, pago único\\)\n` +
-      `/wallet — ver tus wallets registradas\n` +
-      `/wallet \\[klv1\\.\\.\\.\\] — añadir una wallet para alertas personalizadas\n` +
-      `/wallet eliminar \\[klv1\\.\\.\\.\\] — eliminar una wallet\n` +
-      `/estado — ver tu suscripción y delegaciones activas\n`,
+      `Monitorizo la red Klever en tiempo real y publico un informe completo al cierre de cada época \\(cada 6 horas\\) en el canal privado de suscriptores, con estadísticas de red, actividad on\\-chain, estado de validadores y mucho más\\.`,
       { parse_mode: 'MarkdownV2' }
     )
   })
