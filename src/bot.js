@@ -732,14 +732,49 @@ function createBot(pool) {
   })
 
   // /misaldo — ver dirección y saldo de la wallet custodial
-  bot.command('misaldo', async (ctx) => {
+  // /crearwallet — crea la wallet custodial si no existe, o muestra la que ya tienes
+  bot.command('crearwallet', async (ctx) => {
     const telegramId = ctx.from.id
 
-    const address = await custodialService.getCustodialAddress(telegramId)
+    try {
+      const existing = await custodialService.getCustodialAddress(telegramId)
+      if (existing) {
+        return ctx.replyWithHTML(
+          `ℹ️ <b>Ya tienes una wallet</b>\n\n<code>${escapeHtml(existing)}</code>`
+        )
+      }
+
+      const created = await custodialService.createWallet(telegramId)
+      if (!created.success) {
+        console.error('[crearwallet] Error creando wallet custodial:', created.error)
+        return ctx.replyWithHTML('❌ No se pudo crear tu wallet. Inténtalo más tarde.')
+      }
+
+      await ctx.replyWithHTML(
+        `🆕 <b>Wallet creada</b>\n\n<code>${escapeHtml(created.address)}</code>\n\n` +
+        `Deposita KLV u otros tokens en esa dirección para poder usar <code>/enviar</code>.`
+      )
+    } catch (err) {
+      console.error('[crearwallet] Error:', err.message)
+      await ctx.replyWithHTML('❌ Error interno. Inténtalo de nuevo más tarde.')
+    }
+  })
+
+  // /misaldo — ver dirección y saldo de la wallet custodial (la crea si no existe)
+  bot.command('saldo', async (ctx) => {
+    const telegramId = ctx.from.id
+
+    let address = await custodialService.getCustodialAddress(telegramId)
     if (!address) {
+      const created = await custodialService.createWallet(telegramId)
+      if (!created.success) {
+        console.error('[saldo] Error creando wallet custodial:', created.error)
+        return ctx.replyWithHTML('❌ No se pudo crear tu wallet. Inténtalo más tarde.')
+      }
+      address = created.address
       return ctx.replyWithHTML(
-        `📭 <b>Aún no tienes wallet</b>\n\n` +
-        `Se crea automáticamente la primera vez que uses <code>/enviar</code>.`
+        `🆕 <b>Wallet creada</b>\n\n<code>${escapeHtml(address)}</code>\n\n` +
+        `Saldo actual: 0 KLV — deposita para empezar a usarla.`
       )
     }
 
@@ -759,8 +794,45 @@ function createBot(pool) {
 
       await ctx.replyWithHTML(msg)
     } catch (err) {
-      console.error('[misaldo] Error:', err.message)
+      console.error('[saldo] Error:', err.message)
       await ctx.replyWithHTML('❌ Error al consultar el saldo. Inténtalo más tarde.')
+    }
+  })
+
+  // /exportarclave — muestra la clave privada de la wallet custodial
+  bot.command('exportarclave', async (ctx) => {
+    const telegramId = ctx.from.id
+
+    try {
+      const address = await custodialService.getCustodialAddress(telegramId)
+      if (!address) {
+        return ctx.replyWithHTML(
+          `📭 <b>Aún no tienes wallet</b>\n\nCréala con <code>/crearwallet</code>.`
+        )
+      }
+
+      const privateKey = await custodialService.getPrivateKey(telegramId)
+      if (!privateKey) {
+        console.error('[exportarclave] No se pudo descifrar la clave para', telegramId)
+        return ctx.replyWithHTML('❌ Error al obtener la clave. Inténtalo más tarde.')
+      }
+
+      const sentMsg = await ctx.replyWithHTML(
+        `⚠️ <b>CLAVE PRIVADA — NO LA COMPARTAS CON NADIE</b>\n\n` +
+        `Quien tenga esta clave controla por completo los fondos de esta wallet.\n\n` +
+        `<b>Dirección:</b>\n<code>${escapeHtml(address)}</code>\n\n` +
+        `<b>Clave privada</b> (toca para revelar):\n<tg-spoiler><code>${escapeHtml(privateKey)}</code></tg-spoiler>\n\n` +
+        `🗑️ Este mensaje se borrará en 60 segundos. Guárdala en un lugar seguro (nunca en capturas de pantalla en la nube).`
+      )
+
+      console.log(`[exportarclave] Clave exportada por TG:${telegramId}`)
+
+      setTimeout(() => {
+        ctx.deleteMessage(sentMsg.message_id).catch(() => {})
+      }, 60000)
+    } catch (err) {
+      console.error('[exportarclave] Error:', err.message)
+      await ctx.replyWithHTML('❌ Error interno. Inténtalo de nuevo más tarde.')
     }
   })
 
