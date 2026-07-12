@@ -821,7 +821,7 @@ function createBot(pool) {
         `⚠️ <b>CLAVE PRIVADA — NO LA COMPARTAS CON NADIE</b>\n\n` +
         `Quien tenga esta clave controla por completo los fondos de esta wallet.\n\n` +
         `<b>Dirección:</b>\n<code>${escapeHtml(address)}</code>\n\n` +
-        `<b>Clave privada</b> (toca para revelar):\n<tg-spoiler><code>${escapeHtml(privateKey)}</code></tg-spoiler>\n\n` +
+        `<b>Clave privada</b> (toca para revelar):\n<tg-spoiler>${escapeHtml(privateKey)}</tg-spoiler>\n\n` +
         `🗑️ Este mensaje se borrará en 60 segundos. Guárdala en un lugar seguro (nunca en capturas de pantalla en la nube).`
       )
 
