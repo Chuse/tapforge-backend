@@ -37,6 +37,16 @@ function escapeHtml(text) {
     .replace(/>/g, '&gt;')
 }
 
+// Comandos sensibles (crear/consultar/exportar wallet custodial) solo en privado.
+// Devuelve true si bloqueó y ya respondió; false si puede seguir.
+async function requirePrivateChat(ctx) {
+  if (ctx.chat.type !== 'private') {
+    await ctx.replyWithHTML('🔒 Por seguridad, este comando solo funciona en un chat privado conmigo.')
+    return true
+  }
+  return false
+}
+
 function generatePaymentCode() {
   const bytes = crypto.randomBytes(4).toString('hex').toUpperCase()
   return `KLV-${bytes.slice(0, 4)}-${bytes.slice(4, 8)}`
@@ -302,7 +312,12 @@ function createBot(pool) {
     await ctx.reply(
       `👋 Hola ${name}\\!\n\n` +
       `Soy *Lyra*, el analista de red de Desna\\.\n\n` +
-      `Monitorizo la red Klever en tiempo real y publico un informe completo al cierre de cada época \\(cada 6 horas\\) en el canal privado de suscriptores, con estadísticas de red, actividad on\\-chain, estado de validadores y mucho más\\.`,
+      `Monitorizo la red Klever en tiempo real y publico un informe completo al cierre de cada época \\(cada 6 horas\\) en el canal privado de suscriptores, con estadísticas de red, actividad on\\-chain, estado de validadores y mucho más\\.\n\n` +
+      `*Comandos disponibles:*\n` +
+      `/crearwallet — crea tu wallet\n` +
+      `/saldo — ver dirección y saldo\n` +
+      `/enviar CANTIDAD TOKEN DIRECCION — enviar fondos\n` +
+      `/exportarclave — ver tu clave privada`,
       { parse_mode: 'MarkdownV2' }
     )
   })
@@ -725,9 +740,108 @@ function createBot(pool) {
     }
   })
 
+  // /propina CANTIDAD TOKEN — respondiendo al mensaje del usuario destinatario
+  bot.command('propina', async (ctx) => {
+    const senderId = ctx.from.id
+    const target   = ctx.message.reply_to_message?.from
+
+    if (!target) {
+      return ctx.replyWithHTML(
+        `⚠️ <b>Formato incorrecto</b>\n\n` +
+        `Responde al mensaje de la persona a la que quieres dar propina y escribe:\n` +
+        `<code>/propina CANTIDAD TOKEN</code>\n` +
+        `Ejemplo: <code>/propina 5 KLV</code>`
+      )
+    }
+    if (target.is_bot) {
+      return ctx.replyWithHTML('❌ No puedes dar propina a un bot.')
+    }
+    if (target.id === senderId) {
+      return ctx.replyWithHTML('❌ No puedes darte propina a ti mismo.')
+    }
+
+    const args = ctx.message.text.split(' ').slice(1)
+    if (args.length < 2) {
+      return ctx.replyWithHTML(
+        `⚠️ Uso: <code>/propina CANTIDAD TOKEN</code>\n` +
+        `Ejemplo: <code>/propina 5 KLV</code>`
+      )
+    }
+
+    const [amountStr, tokenSymbolRaw] = args
+    const tokenSymbol = tokenSymbolRaw.trim().toUpperCase()
+
+    const amount = parseFloat(amountStr.replace(',', '.'))
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return ctx.replyWithHTML('❌ Cantidad inválida. Debe ser un número mayor que 0.')
+    }
+
+    const tokenRes = await pool.query(
+      `SELECT id, precision FROM tokens WHERE chain_id = 'klever' AND UPPER(symbol) = $1 LIMIT 1`,
+      [tokenSymbol]
+    )
+    if (tokenRes.rows.length === 0) {
+      return ctx.replyWithHTML(`❌ Token <b>${escapeHtml(tokenSymbol)}</b> no reconocido.`)
+    }
+    const { id: tokenId, precision } = tokenRes.rows[0]
+
+    try {
+      // Emisor: debe tener wallet ya creada con fondos (se crea igualmente si falta,
+      // pero entonces no tendrá saldo y el envío fallará — igual que en /enviar)
+      let senderAddress = await custodialService.getCustodialAddress(senderId)
+      if (!senderAddress) {
+        const created = await custodialService.createWallet(senderId)
+        if (!created.success) {
+          console.error('[propina] Error creando wallet del emisor:', created.error)
+          return ctx.replyWithHTML('❌ No se pudo crear tu wallet. Inténtalo más tarde.')
+        }
+        senderAddress = created.address
+        return ctx.replyWithHTML(
+          `🆕 <b>Wallet creada</b>\n\n<code>${escapeHtml(senderAddress)}</code>\n\n` +
+          `Aún no tiene fondos. Deposita ${escapeHtml(tokenSymbol)} y vuelve a intentar el <code>/tip</code>.`
+        )
+      }
+
+      // Destinatario: se crea automáticamente si es la primera vez que recibe algo
+      let targetAddress = await custodialService.getCustodialAddress(target.id)
+      let targetIsNew = false
+      if (!targetAddress) {
+        const created = await custodialService.createWallet(target.id)
+        if (!created.success) {
+          console.error('[propina] Error creando wallet del destinatario:', created.error)
+          return ctx.replyWithHTML('❌ No se pudo crear la wallet del destinatario. Inténtalo más tarde.')
+        }
+        targetAddress = created.address
+        targetIsNew = true
+      }
+
+      await ctx.replyWithHTML('⏳ Enviando propina...')
+
+      const result = await custodialService.sendTransfer(senderId, targetAddress, amount, tokenId, precision)
+
+      const targetName = escapeHtml(target.username ? `@${target.username}` : (target.first_name || 'usuario'))
+
+      if (result.success) {
+        await ctx.replyWithHTML(
+          `🎁 <b>Propina enviada a ${targetName}</b>\n\n` +
+          `<b>Cantidad:</b> ${escapeHtml(amount)} ${escapeHtml(tokenSymbol)}\n` +
+          `<b>Hash:</b> <code>${escapeHtml(result.txHash)}</code>` +
+          (targetIsNew ? `\n\nSe le ha creado una wallet nueva para recibirla.` : '')
+        )
+      } else {
+        console.error('[propina] Error en sendTransfer:', result.error)
+        await ctx.replyWithHTML(`❌ Error al enviar la propina: ${escapeHtml(String(result.error))}`)
+      }
+    } catch (err) {
+      console.error('[propina] Error inesperado:', err.message)
+      await ctx.replyWithHTML('❌ Error interno. Inténtalo de nuevo más tarde.')
+    }
+  })
+
   // /misaldo — ver dirección y saldo de la wallet custodial
   // /crearwallet — crea la wallet custodial si no existe, o muestra la que ya tienes
   bot.command('crearwallet', async (ctx) => {
+    if (await requirePrivateChat(ctx)) return
     const telegramId = ctx.from.id
 
     try {
@@ -756,6 +870,7 @@ function createBot(pool) {
 
   // /misaldo — ver dirección y saldo de la wallet custodial (la crea si no existe)
   bot.command('saldo', async (ctx) => {
+    if (await requirePrivateChat(ctx)) return
     const telegramId = ctx.from.id
 
     let address = await custodialService.getCustodialAddress(telegramId)
@@ -795,6 +910,7 @@ function createBot(pool) {
 
   // /exportarclave — muestra la clave privada de la wallet custodial
   bot.command('exportarclave', async (ctx) => {
+    if (await requirePrivateChat(ctx)) return
     const telegramId = ctx.from.id
 
     try {
