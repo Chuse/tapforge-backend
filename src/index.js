@@ -11,6 +11,7 @@ const assetsRouter      = require('./routes/assets')
 const pointsRouter      = require('./routes/points')
 const validatorsRouter  = require('./routes/validators')
 const plusRouter        = require('./routes/plus')
+const treasuryRouter    = require('./routes/treasury')
 
 const adminAuthRouter   = require('./routes/adminAuth')
 const adminChainsRouter = require('./routes/adminChains')
@@ -130,6 +131,12 @@ app.use('/validators', validatorsRouter)
 // ─────────────────────────────────────────────────────────────
 
 app.use('/plus', plusRouter)
+
+// ─────────────────────────────────────────────────────────────
+// Tesorería KFI (transparencia pública)
+// ─────────────────────────────────────────────────────────────
+
+app.use('/treasury', treasuryRouter)
 
 // ─────────────────────────────────────────────────────────────
 // Changelly
