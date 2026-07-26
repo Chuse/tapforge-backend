@@ -80,6 +80,27 @@ async function initDB() {
         user_agent TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       );
+
+      -- Desna+ — un registro por pago verificado. pay_hash UNIQUE es la
+      -- protección de idempotencia: si el mismo hash llega dos veces
+      -- (reintento del cliente, doble tap, etc.), la segunda inserción
+      -- falla por duplicado y /plus/claim devuelve el resultado ya
+      -- existente en vez de mintear dos veces.
+      CREATE TABLE IF NOT EXISTS plus_subscriptions (
+        id             SERIAL PRIMARY KEY,
+        wallet_address VARCHAR NOT NULL,
+        pay_hash       VARCHAR NOT NULL UNIQUE,
+        asset          VARCHAR NOT NULL,
+        amount_paid    VARCHAR NOT NULL,
+        nonce          INTEGER,
+        status         VARCHAR NOT NULL DEFAULT 'pending',
+        expires_at     TIMESTAMP,
+        created_at     TIMESTAMP DEFAULT NOW(),
+        updated_at     TIMESTAMP DEFAULT NOW()
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_plus_subscriptions_wallet
+        ON plus_subscriptions (wallet_address);
     `)
 
     await client.query(`
