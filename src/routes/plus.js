@@ -48,6 +48,86 @@ const ASSET_DECIMALS = {
 // más barato que rechazar pagos legítimos.
 const PRICE_TOLERANCE = Number(process.env.PLUS_PRICE_TOLERANCE ?? 0.90)
 
+// ─── Comisiones de red ──────────────────────────────────────────────────────
+// Las sirve este backend para que NINGÚN dispositivo tenga que consultarlas.
+// Viajan en /plus/config, que la app ya pide al arrancar, así que no supone
+// ni una sola petición extra desde el móvil.
+//
+// El valor es global (lo fija una votación de KFI holders), así que cachearlo
+// aquí una hora significa una consulta a Klever por hora EN TOTAL, en vez de
+// una por usuario. Y cuando cambia, se propaga a todo el mundo en su siguiente
+// arranque — sin esperar a que cada usuario haga una transacción para
+// enterarse por su cuenta.
+const FEES_CACHE_TTL_MS = Number(process.env.PLUS_FEES_TTL_MS ?? 60 * 60 * 1000)
+
+// Respaldo verificado en mainnet el 26/07/2026 contra una transferencia real:
+//   kAppFee 1.000000 + bandwidth (250+13 bytes)×8000 = 2.104000 → 3.104000 KLV
+const FEES_FALLBACK = {
+  feePerDataByte: 8000,
+  baseTxSize:     250,
+  kApp: {
+    Transfer:     1000000,
+    AssetTrigger: 2000000,
+    Freeze:       1000000,
+    Unfreeze:     1000000,
+    Delegate:     1000000,
+    Undelegate:   1000000,
+    Withdraw:     1000000,
+    Claim:        1000000,
+    Vote:         1000000,
+    CreateAsset:  20000000000,
+  },
+}
+
+let _feesCache = null   // { value, ts }
+
+/** Lee un Int64 del formato { type, value } de la API de Klever. */
+function readParam(params, key, fallback) {
+  const raw = params?.[key]?.value
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 ? n : fallback
+}
+
+/**
+ * Comisiones actuales de Klever, cacheadas.
+ * Nunca lanza: ante cualquier fallo devuelve lo último conocido, y si no hay
+ * nada, el respaldo. Una comisión algo desfasada es mucho mejor que romper
+ * /plus/config, que además sirve la colección del gate.
+ */
+async function getNetworkFees() {
+  const now = Date.now()
+  if (_feesCache && now - _feesCache.ts < FEES_CACHE_TTL_MS) {
+    return _feesCache.value
+  }
+
+  try {
+    const res  = await fetch(`${KLEVER_API_BASE}/v1.0/network/config`)
+    const json = await res.json()
+    const p    = json?.data?.parameters
+    if (!p) throw new Error('network/config sin parámetros')
+
+    const kApp = {}
+    for (const name of Object.keys(FEES_FALLBACK.kApp)) {
+      kApp[name] = readParam(p, `KAppFee${name}`, FEES_FALLBACK.kApp[name])
+    }
+
+    const value = {
+      feePerDataByte: readParam(p, 'FeePerDataByte', FEES_FALLBACK.feePerDataByte),
+      // No es un parámetro de gobernanza (no se vota): constante de protocolo.
+      baseTxSize:     FEES_FALLBACK.baseTxSize,
+      kApp,
+      updatedAt:      Math.floor(now / 1000),
+    }
+
+    _feesCache = { value, ts: now }
+    return value
+  } catch (e) {
+    console.error('[plus] No se pudieron leer las comisiones de red:', e.message)
+    if (_feesCache) return _feesCache.value
+    return { ...FEES_FALLBACK, updatedAt: null }
+  }
+}
+
 // Validez del SFT: 1 año en segundos
 const SUBSCRIPTION_DURATION_S = 365 * 24 * 60 * 60
 
@@ -58,10 +138,14 @@ const SUBSCRIPTION_DURATION_S = 365 * 24 * 60 * 60
 // app, así que colgarlo de un endpoint que puede caer dejaría sin premium a
 // todos los suscriptores cada vez que falle el proveedor de precios.
 // Sin dependencias externas: esta ruta no puede fallar.
-router.get('/config', (req, res) => {
+router.get('/config', async (req, res) => {
   res.json({
     collection: PLUS_COLLECTION,
     network:    PLUS_NETWORK,
+    // Comisiones de red, para que la app no tenga que consultarlas por su
+    // cuenta. getNetworkFees() nunca lanza, así que esta ruta sigue sin poder
+    // fallar — importante, porque también sirve la colección del gate.
+    fees:       await getNetworkFees(),
   })
 })
 
