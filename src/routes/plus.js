@@ -60,6 +60,20 @@ const PRICE_TOLERANCE = Number(process.env.PLUS_PRICE_TOLERANCE ?? 0.90)
 // enterarse por su cuenta.
 const FEES_CACHE_TTL_MS = Number(process.env.PLUS_FEES_TTL_MS ?? 60 * 60 * 1000)
 
+// Las comisiones se leen SIEMPRE de mainnet, con independencia de la red en la
+// que opere este backend. Dos razones:
+//
+//  1. Testnet no expone /v1.0/network/config — devuelve HTML de error, que es
+//     lo que provocaba el "Unexpected token p in JSON" y dejaba el endpoint
+//     sirviendo siempre los valores de respaldo.
+//  2. Aunque lo expusiera, las comisiones relevantes son las de mainnet: es
+//     donde los usuarios envían KLV de verdad y donde pagan de su bolsillo.
+//     Que el backend esté en testnet para probar Desna+ no debería cambiar la
+//     comisión que se le muestra a nadie.
+const FEES_API = (process.env.PLUS_FEES_API ?? 'https://api.mainnet.klever.org')
+  .replace(/\/+$/, '')
+  .replace(/\/v1\.0$/, '')
+
 // Respaldo verificado en mainnet el 26/07/2026 contra una transferencia real:
 //   kAppFee 1.000000 + bandwidth (250+13 bytes)×8000 = 2.104000 → 3.104000 KLV
 const FEES_FALLBACK = {
@@ -101,8 +115,18 @@ async function getNetworkFees() {
   }
 
   try {
-    const res  = await fetch(`${KLEVER_API_BASE}/v1.0/network/config`)
-    const json = await res.json()
+    const res  = await fetch(`${FEES_API}/v1.0/network/config`)
+    if (!res.ok) throw new Error(`HTTP ${res.status} en ${FEES_API}/v1.0/network/config`)
+
+    // Ante una URL inexistente la API devuelve HTML, no JSON. Se comprueba
+    // antes de parsear para que el log diga qué pasó de verdad en lugar de un
+    // "Unexpected token" sin contexto.
+    const body = await res.text()
+    if (!body.trim().startsWith('{')) {
+      throw new Error(`respuesta no JSON de ${FEES_API} (¿red sin este endpoint?)`)
+    }
+
+    const json = JSON.parse(body)
     const p    = json?.data?.parameters
     if (!p) throw new Error('network/config sin parámetros')
 
