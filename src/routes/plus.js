@@ -63,9 +63,9 @@ const FEES_CACHE_TTL_MS = Number(process.env.PLUS_FEES_TTL_MS ?? 60 * 60 * 1000)
 // Las comisiones se leen SIEMPRE de mainnet, con independencia de la red en la
 // que opere este backend. Dos razones:
 //
-//  1. Testnet no expone /v1.0/network/config — devuelve HTML de error, que es
-//     lo que provocaba el "Unexpected token p in JSON" y dejaba el endpoint
-//     sirviendo siempre los valores de respaldo.
+//  1. Testnet no expone este endpoint: devuelve HTML de error, que es lo que
+//     provocaba el "Unexpected token p in JSON" y dejaba /plus/config sirviendo
+//     siempre los valores de respaldo.
 //  2. Aunque lo expusiera, las comisiones relevantes son las de mainnet: es
 //     donde los usuarios envían KLV de verdad y donde pagan de su bolsillo.
 //     Que el backend esté en testnet para probar Desna+ no debería cambiar la
@@ -115,8 +115,8 @@ async function getNetworkFees() {
   }
 
   try {
-    const res  = await fetch(`${FEES_API}/v1.0/network/config`)
-    if (!res.ok) throw new Error(`HTTP ${res.status} en ${FEES_API}/v1.0/network/config`)
+    const res  = await fetch(`${FEES_API}/v1.0/network/network-parameters`)
+    if (!res.ok) throw new Error(`HTTP ${res.status} en ${FEES_API}/v1.0/network/network-parameters`)
 
     // Ante una URL inexistente la API devuelve HTML, no JSON. Se comprueba
     // antes de parsear para que el log diga qué pasó de verdad en lugar de un
