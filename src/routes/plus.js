@@ -60,23 +60,37 @@ const PRICE_TOLERANCE = Number(process.env.PLUS_PRICE_TOLERANCE ?? 0.90)
 // enterarse por su cuenta.
 const FEES_CACHE_TTL_MS = Number(process.env.PLUS_FEES_TTL_MS ?? 60 * 60 * 1000)
 
-// Las comisiones se leen SIEMPRE de mainnet, con independencia de la red en la
-// que opere este backend. Dos razones:
+// Las comisiones se leen de la MISMA red en la que opera el backend.
 //
-//  1. Testnet no expone este endpoint: devuelve HTML de error, que es lo que
-//     provocaba el "Unexpected token p in JSON" y dejaba /plus/config sirviendo
-//     siempre los valores de respaldo.
-//  2. Aunque lo expusiera, las comisiones relevantes son las de mainnet: es
-//     donde los usuarios envían KLV de verdad y donde pagan de su bolsillo.
-//     Que el backend esté en testnet para probar Desna+ no debería cambiar la
-//     comisión que se le muestra a nadie.
-const FEES_API = (process.env.PLUS_FEES_API ?? 'https://api.mainnet.klever.org')
+// Antes se forzaban a mainnet, con el argumento de que «las comisiones
+// relevantes son las de mainnet». Era un error: si la app opera en testnet, las
+// comisiones relevantes son las de testnet, que es donde el usuario paga. Y son
+// MUY distintas —KAppFeeTransfer vale 1.000.000 en mainnet y 1 en testnet,
+// FeePerDataByte 8.000 frente a 1—, así que la app mostraba 3,056 KLV cuando la
+// red cobraba 0,000258. Un factor de 11.845.
+//
+// Ambas redes exponen /v1.0/network/network-parameters; el fallo original era
+// que se consultaba /network/config, que no existe en ninguna de las dos.
+const FEES_API = (process.env.PLUS_FEES_API
+  ?? process.env.KLEVER_API
+  ?? (PLUS_NETWORK === 'mainnet'
+        ? 'https://api.mainnet.klever.org'
+        : 'https://api.testnet.klever.org'))
   .replace(/\/+$/, '')
   .replace(/\/v1\.0$/, '')
 
-// Respaldo verificado en mainnet el 26/07/2026 contra una transferencia real:
-//   kAppFee 1.000000 + bandwidth (250+13 bytes)×8000 = 2.104000 → 3.104000 KLV
-const FEES_FALLBACK = {
+// Respaldo por red, verificado contra transferencias reales:
+//   mainnet — kAppFee 1.000000 + bandwidth (250+13)×8000 = 3.104000 KLV
+//   testnet — kAppFee 0.000001 + bandwidth (250+7)×1    = 0.000258 KLV
+const FEES_FALLBACK_TESTNET = {
+  feePerDataByte: 1,
+  baseTxSize:     250,
+  kApp: { Transfer: 1, AssetTrigger: 2000000, Freeze: 1000000, Unfreeze: 1000000,
+          Delegate: 1000000, Undelegate: 1000000, Withdraw: 1000000, Claim: 1000000,
+          Vote: 1000000, CreateAsset: 20000000000 },
+}
+
+const FEES_FALLBACK_MAINNET = {
   feePerDataByte: 8000,
   baseTxSize:     250,
   kApp: {
@@ -92,6 +106,10 @@ const FEES_FALLBACK = {
     CreateAsset:  20000000000,
   },
 }
+
+const FEES_FALLBACK = PLUS_NETWORK === 'mainnet'
+  ? FEES_FALLBACK_MAINNET
+  : FEES_FALLBACK_TESTNET
 
 let _feesCache = null   // { value, ts }
 
