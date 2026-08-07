@@ -173,6 +173,33 @@ async function getNetworkFees() {
 // Validez del SFT: 1 año en segundos
 const SUBSCRIPTION_DURATION_S = 365 * 24 * 60 * 60
 
+// ─── Interruptores de funcionalidad ────────────────────────────────────────
+//
+// Permiten apagar una función desde Railway sin publicar versión de la app.
+// Importa porque en Android una actualización tarda días en llegar a todo el
+// mundo: si algo falla en producción, esto es el único interruptor rápido.
+//
+// Convención: variable FEATURE_<NOMBRE> con 'true'/'false'. Lo que no esté
+// definido usa el valor por defecto de aquí abajo.
+function featureFlag(name, fallback) {
+  const raw = process.env[`FEATURE_${name.toUpperCase()}`]
+  if (raw === undefined) return fallback
+  return raw === 'true' || raw === '1'
+}
+
+function getFeatures() {
+  return {
+    staking: featureFlag('staking', true),
+    swap:    featureFlag('swap',    true),
+    // dApps y compra van apagadas: el bridge de firma no muestra el dominio
+    // que pide la operación, así que no debe estar accesible todavía.
+    dapps:   featureFlag('dapps',   false),
+    impact:  featureFlag('impact',  true),
+    buy:     featureFlag('buy',     false),
+    plus:    featureFlag('plus',    true),
+  }
+}
+
 // ─── GET /plus/config ──────────────────────────────────────────────────────
 // Config que la app necesita para el GATE (qué colección mirar), no para
 // comprar. Va aparte de /quote a propósito: quote depende de CoinGecko y
@@ -188,6 +215,7 @@ router.get('/config', async (req, res) => {
     // cuenta. getNetworkFees() nunca lanza, así que esta ruta sigue sin poder
     // fallar — importante, porque también sirve la colección del gate.
     fees:       await getNetworkFees(),
+    features:   getFeatures(),
   })
 })
 
